@@ -1,0 +1,49 @@
+name: Publicar Mi balance
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: https://xebzgcovmdojyqrywmdk.supabase.co
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: sb_publishable_eRv93rQM_1vzIwEKGNNBPA_RcAq_y1L
+      NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
+    steps:
+      - name: Descargar aplicación
+        uses: actions/checkout@v4
+      - name: Preparar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Construir aplicación
+        run: npm run build
+      - name: Generar versión estática
+        run: npm run export:pages
+      - name: Configurar Pages
+        uses: actions/configure-pages@v5
+      - name: Preparar publicación
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/client
+      - name: Publicar
+        id: deployment
+        uses: actions/deploy-pages@v4
