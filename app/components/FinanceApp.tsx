@@ -75,6 +75,7 @@ import {
   monthKey,
   monthLabel,
   moveMonth,
+  movementDisplayAmountCents,
   movementsForMonth,
   parseAmount,
   projectionForMonth,
@@ -678,7 +679,7 @@ function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, 
               <button className="text-button" onClick={onOpenMovements}>Ver todos <ChevronRight size={16} /></button>
             </div>
             <div className="movement-list compact">
-              {monthlyMovements.slice(0, 4).map((movement) => <MovementRow key={movement.id} movement={movement} categories={data.categories} onClick={() => onEdit(movement)} />)}
+              {monthlyMovements.slice(0, 4).map((movement) => <MovementRow key={movement.id} movement={movement} movements={data.movements} categories={data.categories} onClick={() => onEdit(movement)} />)}
             </div>
       </section>}
 
@@ -820,8 +821,11 @@ function MovementsView({ data, month, onMonthChange, onAdd, onEdit }: {
         <div className="dated-list">
           {groupedEntries.map(([groupKey, movements]) => (
             <section key={groupKey}>
-              <h2>{grouping === "date" ? dayLabel(groupKey) : data.categories.find((category) => category.id === groupKey)?.name ?? "Sin categoría"}<span>{formatMoney(movements.reduce((sum, movement) => sum + (movement.kind === "income" ? movement.amountCents : -movement.amountCents), 0))}</span></h2>
-              <div className="movement-list">{movements.map((movement) => <MovementRow key={movement.id} movement={movement} categories={data.categories} onClick={() => onEdit(movement)} />)}</div>
+              <h2>{grouping === "date" ? dayLabel(groupKey) : data.categories.find((category) => category.id === groupKey)?.name ?? "Sin categoría"}<span>{formatMoney(movements.reduce((sum, movement) => {
+                const amountCents = movementDisplayAmountCents(data.movements, movement);
+                return sum + (movement.kind === "income" ? amountCents : -amountCents);
+              }, 0))}</span></h2>
+              <div className="movement-list">{movements.map((movement) => <MovementRow key={movement.id} movement={movement} movements={data.movements} categories={data.categories} onClick={() => onEdit(movement)} />)}</div>
             </section>
           ))}
         </div>
@@ -830,14 +834,25 @@ function MovementsView({ data, month, onMonthChange, onAdd, onEdit }: {
   );
 }
 
-function MovementRow({ movement, categories, onClick }: { movement: Movement; categories: Category[]; onClick: () => void }) {
+function MovementRow({ movement, movements, categories, onClick }: { movement: Movement; movements: Movement[]; categories: Category[]; onClick: () => void }) {
   const category = categories.find((item) => item.id === movement.categoryId);
   const sign = movement.kind === "income" ? "+" : "−";
+  const usage = movement.status === "planned" ? forecastUsage(movements, movement) : null;
+  const linkedForecast = movement.forecastId ? movements.find((item) => item.id === movement.forecastId) : undefined;
+  const displayAmountCents = movementDisplayAmountCents(movements, movement);
+  const displayAmount = displayAmountCents === 0 ? formatMoney(0) : `${sign}${formatMoney(displayAmountCents)}`;
+  const appliedLabel = movement.kind === "expense" ? "Descontado" : movement.kind === "income" ? "Cobrado" : "Apartado";
+  const relationshipLabel = movement.kind === "expense" ? "Descuenta de" : "Aplicado a";
   return (
     <button className="movement-row" onClick={onClick}>
       <span className="movement-icon" style={{ color: category?.color, backgroundColor: `${category?.color ?? "#8190a5"}18` }}><CategoryIcon category={category} /></span>
-      <span className="movement-copy"><strong>{movement.concept}</strong><small>{category?.name ?? "Sin categoría"}{movement.status === "planned" && <em>Previsto</em>}</small></span>
-      <span className={`movement-amount ${movement.kind}`}><strong>{sign}{formatMoney(movement.amountCents)}</strong><small>{dayLabel(movement.date)}</small></span>
+      <span className="movement-copy">
+        <strong>{movement.concept}</strong>
+        <small>{category?.name ?? "Sin categoría"}{movement.status === "planned" && <em>Previsto</em>}</small>
+        {usage && usage.appliedCents > 0 && <small className="movement-forecast-detail">{appliedLabel} {formatMoney(usage.appliedCents)} · {usage.overrunCents > 0 ? `superada en ${formatMoney(usage.overrunCents)}` : `quedan ${formatMoney(usage.remainingCents)}`}</small>}
+        {linkedForecast && <small className="movement-forecast-detail">{relationshipLabel} «{linkedForecast.concept}»</small>}
+      </span>
+      <span className={`movement-amount ${movement.kind}`}><strong>{displayAmount}</strong><small>{usage ? `Pendiente de ${formatMoney(movement.amountCents)}` : dayLabel(movement.date)}</small></span>
     </button>
   );
 }
