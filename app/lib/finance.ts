@@ -121,6 +121,10 @@ export function forecastUsage(movements: Movement[], forecast: Movement): Foreca
   };
 }
 
+export function movementDisplayAmountCents(movements: Movement[], movement: Movement) {
+  return movement.status === "planned" ? forecastUsage(movements, movement).remainingCents : movement.amountCents;
+}
+
 export function forecastsForMonth(movements: Movement[], key: string) {
   return movementsForMonth(movements, key)
     .filter((movement) => movement.status === "planned")
