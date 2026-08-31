@@ -189,13 +189,38 @@ function normalizedConcept(value: string) {
   return value.trim().toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
 }
 
-function sameCarryoverConcept(first: Movement, second: Movement) {
-  return first.status === "planned" &&
-    first.kind === second.kind &&
-    first.categoryId === second.categoryId &&
-    normalizedConcept(first.concept) === normalizedConcept(second.concept) &&
-    (first.fundingPlanId ?? "") === (second.fundingPlanId ?? "") &&
-    (first.fundingRole ?? "") === (second.fundingRole ?? "");
+function carryoverMatchScore(candidate: Movement, source: Movement) {
+  if (
+    candidate.status !== "planned" ||
+    candidate.kind !== source.kind ||
+    normalizedConcept(candidate.concept) !== normalizedConcept(source.concept)
+  ) return -1;
+
+  const candidateHasFunding = Boolean(candidate.fundingPlanId || candidate.fundingRole);
+  const sourceHasFunding = Boolean(source.fundingPlanId || source.fundingRole);
+  if (candidateHasFunding || sourceHasFunding) {
+    if (
+      (candidate.fundingPlanId ?? "") !== (source.fundingPlanId ?? "") ||
+      (candidate.fundingRole ?? "") !== (source.fundingRole ?? "")
+    ) return -1;
+  }
+
+  return candidate.categoryId === source.categoryId ? 2 : 1;
+}
+
+function bestCarryoverTargetIndex(movements: Movement[], source: Movement, nextMonth: string) {
+  let bestIndex = -1;
+  let bestScore = -1;
+  for (let index = 0; index < movements.length; index += 1) {
+    const candidate = movements[index];
+    if (!candidate.date.startsWith(nextMonth)) continue;
+    const score = carryoverMatchScore(candidate, source);
+    if (score > bestScore) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  }
+  return bestIndex;
 }
 
 export function createForecastCarryovers(movements: Movement[], key: string, timestamp: string) {
@@ -205,9 +230,7 @@ export function createForecastCarryovers(movements: Movement[], key: string, tim
   const carriedForecasts: ForecastCarryover[] = [];
 
   for (const usage of forecastsForMonth(movements, key).filter((item) => item.remainingCents > 0)) {
-    const existingIndex = working.findIndex(
-      (movement) => movement.date.startsWith(nextMonth) && sameCarryoverConcept(movement, usage.forecast),
-    );
+    const existingIndex = bestCarryoverTargetIndex(working, usage.forecast, nextMonth);
     let target: Movement;
 
     if (existingIndex >= 0) {
@@ -391,3 +414,4 @@ export function parseAmount(value: string) {
   const amount = Number(normalized);
   return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
 }
+
