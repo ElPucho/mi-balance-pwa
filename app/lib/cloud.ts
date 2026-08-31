@@ -159,6 +159,12 @@ async function sendAction(action: CloudAction, payload: unknown, userId: string)
     return;
   }
 
+  if (action === "deleteClosing") {
+    const { error } = await client.from("monthly_closings").delete().eq("id", (payload as { id: string }).id);
+    if (error) throw error;
+    return;
+  }
+
   const [movements, closings] = await Promise.all([
     client.from("movements").delete().eq("user_id", userId),
     client.from("monthly_closings").delete().eq("user_id", userId),
