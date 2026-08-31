@@ -822,9 +822,19 @@ textarea:focus-visible {
   line-height: 1.4;
 }
 
-.close-card button {
+.close-actions {
   grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.close-actions button {
+  display: inline-flex;
   min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border: 1px solid #d7ddec;
   border-radius: 12px;
   background: white;
@@ -832,6 +842,13 @@ textarea:focus-visible {
   cursor: pointer;
   font-size: 12px;
   font-weight: 750;
+}
+
+.close-actions button:only-child { grid-column: 1 / -1; }
+
+.close-actions .reopen-button {
+  border-color: #f0d8bb;
+  color: #a56519;
 }
 
 .search-box {
@@ -1904,6 +1921,7 @@ button:disabled {
 }
 
 .close-summary .result strong { font-size: 20px; }
+.close-summary .opening { background: #f1f5ff; color: var(--primary); }
 .close-sheet .snapshot-note { margin: 12px 0; }
 
 .toast {
