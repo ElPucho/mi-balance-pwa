@@ -1,4 +1,4 @@
-import type { Category, MonthlyClose, Movement, MonthlySnapshot, MovementKind } from "./types";
+import type { Category, ForecastCarryover, MonthlyClose, Movement, MonthlySnapshot, MovementKind } from "./types";
 
 export type ForecastUsage = {
   forecast: Movement;
@@ -91,6 +91,20 @@ export function snapshotForMonth(movements: Movement[], key: string): MonthlySna
   };
 }
 
+export function openingBalanceForMonth(closings: MonthlyClose[], key: string) {
+  return closings.find((closing) => closing.month === moveMonth(key, -1))?.snapshot.resultCents ?? 0;
+}
+
+export function snapshotWithCarryover(movements: Movement[], closings: MonthlyClose[], key: string): MonthlySnapshot {
+  const snapshot = snapshotForMonth(movements, key);
+  const openingBalanceCents = openingBalanceForMonth(closings, key);
+  return {
+    ...snapshot,
+    openingBalanceCents,
+    resultCents: openingBalanceCents + snapshot.resultCents,
+  };
+}
+
 export function plannedForMonth(movements: Movement[], key: string) {
   const planned = movementsForMonth(movements, key).filter((movement) => movement.status === "planned");
   return {
@@ -159,6 +173,91 @@ export function projectionForMonth(movements: Movement[], key: string): MonthlyS
     fundingUsedCents,
     movementCount: actual.movementCount + forecasts.filter((item) => item.remainingCents > 0).length,
   };
+}
+
+export function projectionWithCarryover(movements: Movement[], closings: MonthlyClose[], key: string): MonthlySnapshot {
+  const projection = projectionForMonth(movements, key);
+  const openingBalanceCents = openingBalanceForMonth(closings, key);
+  return {
+    ...projection,
+    openingBalanceCents,
+    resultCents: openingBalanceCents + projection.resultCents,
+  };
+}
+
+function normalizedConcept(value: string) {
+  return value.trim().toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+}
+
+function sameCarryoverConcept(first: Movement, second: Movement) {
+  return first.status === "planned" &&
+    first.kind === second.kind &&
+    first.categoryId === second.categoryId &&
+    normalizedConcept(first.concept) === normalizedConcept(second.concept) &&
+    (first.fundingPlanId ?? "") === (second.fundingPlanId ?? "") &&
+    (first.fundingRole ?? "") === (second.fundingRole ?? "");
+}
+
+export function createForecastCarryovers(movements: Movement[], key: string, timestamp: string) {
+  const nextMonth = moveMonth(key, 1);
+  const working = [...movements];
+  const upserts = new Map<string, Movement>();
+  const carriedForecasts: ForecastCarryover[] = [];
+
+  for (const usage of forecastsForMonth(movements, key).filter((item) => item.remainingCents > 0)) {
+    const existingIndex = working.findIndex(
+      (movement) => movement.date.startsWith(nextMonth) && sameCarryoverConcept(movement, usage.forecast),
+    );
+    let target: Movement;
+
+    if (existingIndex >= 0) {
+      target = {
+        ...working[existingIndex],
+        amountCents: working[existingIndex].amountCents + usage.remainingCents,
+        updatedAt: timestamp,
+      };
+      working[existingIndex] = target;
+    } else {
+      target = {
+        ...usage.forecast,
+        id: crypto.randomUUID(),
+        amountCents: usage.remainingCents,
+        date: dateForMonth(usage.forecast.date, nextMonth),
+        status: "planned",
+        forecastId: undefined,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+      working.push(target);
+    }
+
+    upserts.set(target.id, target);
+    carriedForecasts.push({
+      sourceForecastId: usage.forecast.id,
+      targetMovementId: target.id,
+      amountCents: usage.remainingCents,
+    });
+  }
+
+  return { upserts: [...upserts.values()], carriedForecasts };
+}
+
+export function revertForecastCarryovers(movements: Movement[], carriedForecasts: ForecastCarryover[], timestamp: string) {
+  const carriedByTarget = new Map<string, number>();
+  for (const carryover of carriedForecasts) {
+    carriedByTarget.set(carryover.targetMovementId, (carriedByTarget.get(carryover.targetMovementId) ?? 0) + carryover.amountCents);
+  }
+
+  const upserts: Movement[] = [];
+  const deletes: string[] = [];
+  for (const [targetId, carriedCents] of carriedByTarget) {
+    const target = movements.find((movement) => movement.id === targetId);
+    if (!target) continue;
+    const remainingCents = target.amountCents - carriedCents;
+    if (remainingCents > 0) upserts.push({ ...target, amountCents: remainingCents, updatedAt: timestamp });
+    else deletes.push(targetId);
+  }
+  return { upserts, deletes };
 }
 
 export function categoryBreakdown(movements: Movement[], categories: Category[], key: string) {
