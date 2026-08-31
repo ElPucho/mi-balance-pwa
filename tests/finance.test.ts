@@ -118,6 +118,57 @@ test("el cierre acumula únicamente lo pendiente en el mismo concepto del mes si
   assert.deepEqual(result.carriedForecasts, [{ sourceForecastId: forecast.id, targetMovementId: nextForecast.id, amountCents: 4_000 }]);
 });
 
+test("el cierre acumula el mismo concepto aunque la categoría haya cambiado", () => {
+  const augustClothes: Movement = {
+    ...forecast,
+    id: "clothes-august",
+    concept: " Rópa ",
+    amountCents: 10_000,
+    date: "2026-08-20",
+    categoryId: "shopping",
+  };
+  const septemberClothes: Movement = {
+    ...forecast,
+    id: "clothes-september",
+    concept: "ropa",
+    amountCents: 5_000,
+    date: "2026-09-20",
+    categoryId: "other-expense",
+  };
+  const result = createForecastCarryovers([augustClothes, septemberClothes], "2026-08", "2026-08-31T20:00:00.000Z");
+
+  assert.equal(result.upserts.length, 1);
+  assert.equal(result.upserts[0].id, septemberClothes.id);
+  assert.equal(result.upserts[0].amountCents, 15_000);
+  assert.deepEqual(result.carriedForecasts, [{ sourceForecastId: augustClothes.id, targetMovementId: septemberClothes.id, amountCents: 10_000 }]);
+});
+
+test("el cierre no mezcla planes de fraccionamiento distintos aunque compartan concepto", () => {
+  const augustPlan: Movement = {
+    ...forecast,
+    id: "plan-august",
+    concept: "Ropa",
+    amountCents: 10_000,
+    date: "2026-08-20",
+    fundingPlanId: "plan-a",
+    fundingRole: "target",
+  };
+  const septemberPlan: Movement = {
+    ...forecast,
+    id: "plan-september",
+    concept: "Ropa",
+    amountCents: 5_000,
+    date: "2026-09-20",
+    fundingPlanId: "plan-b",
+    fundingRole: "target",
+  };
+  const result = createForecastCarryovers([augustPlan, septemberPlan], "2026-08", "2026-08-31T20:00:00.000Z");
+
+  assert.equal(result.upserts.length, 1);
+  assert.notEqual(result.upserts[0].id, septemberPlan.id);
+  assert.equal(result.upserts[0].amountCents, 10_000);
+});
+
 test("reabrir el mes deshace solo la cantidad que había sido acumulada", () => {
   const nextForecast: Movement = {
     ...forecast,
@@ -134,3 +185,4 @@ test("reabrir el mes deshace solo la cantidad que había sido acumulada", () => 
   assert.equal(reverted.deletes.length, 0);
   assert.equal(reverted.upserts[0].amountCents, 5_000);
 });
+
