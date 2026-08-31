@@ -166,6 +166,28 @@ export async function saveMonthlyClose(close: MonthlyClose) {
   await db.put("closings", close);
 }
 
+export async function removeMonthlyClose(id: string) {
+  const db = await database();
+  await db.delete("closings", id);
+}
+
+export async function removeSingleMovement(id: string) {
+  const db = await database();
+  const tx = db.transaction("movements", "readwrite");
+  const movements = await tx.store.getAll();
+  const unlinked: Movement[] = [];
+  for (const movement of movements) {
+    if (movement.forecastId === id) {
+      const updated = { ...movement, forecastId: undefined, updatedAt: new Date().toISOString() };
+      await tx.store.put(updated);
+      unlinked.push(updated);
+    }
+  }
+  await tx.store.delete(id);
+  await tx.done;
+  return unlinked;
+}
+
 export async function clearUserData() {
   const db = await database();
   const tx = db.transaction(["movements", "closings"], "readwrite");
