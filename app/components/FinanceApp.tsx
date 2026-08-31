@@ -330,7 +330,8 @@ export default function FinanceApp() {
   async function handleClose(close: MonthlyClose) {
     const existing = data.closings.find((item) => item.month === close.month);
     let finalClose = close;
-    if (!existing) {
+    const needsCarryover = !existing || existing.snapshot.carriedForecasts === undefined;
+    if (needsCarryover) {
       const carryover = createForecastCarryovers(data.movements, close.month, close.closedAt);
       for (const movement of carryover.upserts) {
         await saveMovement(movement);
@@ -349,7 +350,7 @@ export default function FinanceApp() {
     await refresh();
     setCloseOpen(false);
     const carriedCount = finalClose.snapshot.carriedForecasts?.length ?? 0;
-    notify(existing ? "Nota del cierre actualizada" : `${monthLabel(close.month)} cerrado${carriedCount > 0 ? ` · ${carriedCount} pendiente${carriedCount === 1 ? "" : "s"} acumulado${carriedCount === 1 ? "" : "s"}` : ""}`);
+    notify(existing && !needsCarryover ? "Nota del cierre actualizada" : `${monthLabel(close.month)} cerrado${carriedCount > 0 ? ` · ${carriedCount} pendiente${carriedCount === 1 ? "" : "s"} acumulado${carriedCount === 1 ? "" : "s"}` : ""}`);
   }
 
   async function handleReopen(close: MonthlyClose) {
@@ -1378,6 +1379,7 @@ function CloseMonthSheet({ month, movements, closings, existing, onClose, onSave
   const pending = forecastsForMonth(movements, month).filter((item) => item.remainingCents > 0);
   const pendingCents = pending.reduce((sum, item) => sum + item.remainingCents, 0);
   const nextMonth = moveMonth(month, 1);
+  const legacyCloseWithoutCarryover = Boolean(existing && existing.snapshot.carriedForecasts === undefined);
   const [notes, setNotes] = useState(existing?.notes ?? "");
   return (
     <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -1386,8 +1388,8 @@ function CloseMonthSheet({ month, movements, closings, existing, onClose, onSave
         <div className="sheet-heading"><div><span className="eyebrow">Fotografía mensual</span><h2>{monthLabel(month)}</h2></div><button onClick={onClose} aria-label="Cerrar"><X size={22} /></button></div>
         <div className="close-summary"><div><span>Ingresos</span><strong>{formatMoney(snapshot.incomeCents)}</strong></div><div><span>Gastos</span><strong>{formatMoney(snapshot.expenseCents)}</strong></div><div><span>Ahorro</span><strong>{formatMoney(snapshot.savingCents)}</strong></div>{(snapshot.openingBalanceCents ?? 0) !== 0 && <div className="opening"><span>Saldo inicial</span><strong>{formatMoney(snapshot.openingBalanceCents ?? 0)}</strong></div>}<div className="result"><span>Disponible para {monthLabel(nextMonth, "short")}</span><strong>{formatMoney(snapshot.resultCents)}</strong></div></div>
         <label className="field"><span>¿Cómo ha ido el mes?</span><textarea rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Ej. Gasté más en ocio por las vacaciones, pero mantuve el objetivo de ahorro." /></label>
-        <div className="snapshot-note"><ShieldCheck size={18} /><span>{existing ? "El cierre está guardado. Reabre el mes desde Inicio si necesitas modificar sus movimientos." : `${formatMoney(snapshot.resultCents)} quedarán como saldo inicial de ${monthLabel(nextMonth, "short").toLowerCase()}. ${pending.length > 0 ? `${pending.length} previsión${pending.length === 1 ? "" : "es"} pendiente${pending.length === 1 ? "" : "s"} (${formatMoney(pendingCents)}) se acumulará${pending.length === 1 ? "" : "n"} por concepto.` : "No hay previsiones pendientes que trasladar."}`}</span></div>
-        <button className="primary-button full large" onClick={() => onSave({ id: existing?.id ?? crypto.randomUUID(), month, closedAt: existing?.closedAt ?? new Date().toISOString(), notes: notes.trim(), snapshot })}><Check size={18} />{existing ? "Guardar nota" : "Guardar y cerrar el mes"}</button>
+        <div className="snapshot-note"><ShieldCheck size={18} /><span>{legacyCloseWithoutCarryover ? `Este cierre se creó antes de activar la acumulación. Al actualizarlo, ${pending.length} previsión${pending.length === 1 ? "" : "es"} pendiente${pending.length === 1 ? "" : "s"} (${formatMoney(pendingCents)}) se sumará${pending.length === 1 ? "" : "n"} por concepto en ${monthLabel(nextMonth, "short").toLowerCase()}.` : existing ? "El cierre está guardado. Reabre el mes desde Inicio si necesitas modificar sus movimientos." : `${formatMoney(snapshot.resultCents)} quedarán como saldo inicial de ${monthLabel(nextMonth, "short").toLowerCase()}. ${pending.length > 0 ? `${pending.length} previsión${pending.length === 1 ? "" : "es"} pendiente${pending.length === 1 ? "" : "s"} (${formatMoney(pendingCents)}) se acumulará${pending.length === 1 ? "" : "n"} por concepto.` : "No hay previsiones pendientes que trasladar."}`}</span></div>
+        <button className="primary-button full large" onClick={() => onSave({ id: existing?.id ?? crypto.randomUUID(), month, closedAt: existing?.closedAt ?? new Date().toISOString(), notes: notes.trim(), snapshot })}><Check size={18} />{legacyCloseWithoutCarryover ? "Actualizar cierre y acumular" : existing ? "Guardar nota" : "Guardar y cerrar el mes"}</button>
       </section>
     </div>
   );
@@ -1396,3 +1398,4 @@ function CloseMonthSheet({ month, movements, closings, existing, onClose, onSave
 function LoadingState() {
   return <div className="loading-state"><div className="loading-logo"><AppLogo /></div><strong>Preparando tu balance…</strong></div>;
 }
+
