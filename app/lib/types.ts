@@ -44,6 +44,14 @@ export type MonthlySnapshot = {
   resultCents: number;
   fundingUsedCents: number;
   movementCount: number;
+  openingBalanceCents?: number;
+  carriedForecasts?: ForecastCarryover[];
+};
+
+export type ForecastCarryover = {
+  sourceForecastId: string;
+  targetMovementId: string;
+  amountCents: number;
 };
 
 export type MonthlyClose = {
@@ -68,6 +76,7 @@ export type CloudAction =
   | "deleteMovement"
   | "saveSettings"
   | "saveClosing"
+  | "deleteClosing"
   | "clearData";
 
 export type OutboxItem = {
