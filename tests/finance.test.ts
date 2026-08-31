@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { forecastUsage, movementDisplayAmountCents } from "../app/lib/finance.ts";
-import type { Movement } from "../app/lib/types.ts";
+import {
+  createForecastCarryovers,
+  forecastUsage,
+  movementDisplayAmountCents,
+  revertForecastCarryovers,
+  snapshotWithCarryover,
+} from "../app/lib/finance.ts";
+import type { MonthlyClose, Movement } from "../app/lib/types.ts";
 
 const forecast: Movement = {
   id: "forecast-1",
@@ -55,4 +61,76 @@ test("si el gasto supera la previsión, esta queda a cero y se conserva todo el 
       movementDisplayAmountCents(movements, secondExpense),
     12_000,
   );
+});
+
+test("el disponible del cierre anterior se usa como saldo inicial del mes siguiente", () => {
+  const previousClose: MonthlyClose = {
+    id: "close-august",
+    month: "2026-08",
+    closedAt: "2026-08-31T20:00:00.000Z",
+    notes: "",
+    snapshot: {
+      incomeCents: 200_000,
+      expenseCents: 120_000,
+      savingCents: 20_000,
+      fundingUsedCents: 0,
+      resultCents: 60_000,
+      movementCount: 3,
+    },
+  };
+  const septemberIncome: Movement = {
+    ...forecast,
+    id: "september-income",
+    concept: "Ingreso septiembre",
+    amountCents: 100_000,
+    date: "2026-09-01",
+    categoryId: "salary",
+    kind: "income",
+    status: "confirmed",
+  };
+  const septemberExpense: Movement = {
+    ...forecast,
+    id: "september-expense",
+    concept: "Gasto septiembre",
+    amountCents: 30_000,
+    date: "2026-09-02",
+    status: "confirmed",
+  };
+
+  const snapshot = snapshotWithCarryover([septemberIncome, septemberExpense], [previousClose], "2026-09");
+  assert.equal(snapshot.openingBalanceCents, 60_000);
+  assert.equal(snapshot.resultCents, 130_000);
+});
+
+test("el cierre acumula únicamente lo pendiente en el mismo concepto del mes siguiente", () => {
+  const expense = linkedExpense("expense-1", 6_000);
+  const nextForecast: Movement = {
+    ...forecast,
+    id: "forecast-september",
+    amountCents: 5_000,
+    date: "2026-09-20",
+  };
+  const result = createForecastCarryovers([forecast, expense, nextForecast], "2026-08", "2026-08-31T20:00:00.000Z");
+
+  assert.equal(result.upserts.length, 1);
+  assert.equal(result.upserts[0].id, nextForecast.id);
+  assert.equal(result.upserts[0].amountCents, 9_000);
+  assert.deepEqual(result.carriedForecasts, [{ sourceForecastId: forecast.id, targetMovementId: nextForecast.id, amountCents: 4_000 }]);
+});
+
+test("reabrir el mes deshace solo la cantidad que había sido acumulada", () => {
+  const nextForecast: Movement = {
+    ...forecast,
+    id: "forecast-september",
+    amountCents: 9_000,
+    date: "2026-09-20",
+  };
+  const reverted = revertForecastCarryovers(
+    [nextForecast],
+    [{ sourceForecastId: forecast.id, targetMovementId: nextForecast.id, amountCents: 4_000 }],
+    "2026-09-01T08:00:00.000Z",
+  );
+
+  assert.equal(reverted.deletes.length, 0);
+  assert.equal(reverted.upserts[0].amountCents, 5_000);
 });
