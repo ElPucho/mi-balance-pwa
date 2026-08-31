@@ -29,6 +29,7 @@ import {
   Plus,
   ReceiptText,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings,
   SlidersHorizontal,
@@ -65,6 +66,7 @@ import {
   annualProjectionSeries,
   annualSeries,
   categoryBreakdown,
+  createForecastCarryovers,
   dateForMonth,
   dayLabel,
   forecastsForMonth,
@@ -78,8 +80,9 @@ import {
   movementDisplayAmountCents,
   movementsForMonth,
   parseAmount,
-  projectionForMonth,
-  snapshotForMonth,
+  projectionWithCarryover,
+  revertForecastCarryovers,
+  snapshotWithCarryover,
 } from "../lib/finance";
 import {
   cloudConfigured,
@@ -100,7 +103,9 @@ import {
   defaultSettings,
   loadAppData,
   queueCloudAction,
+  removeMonthlyClose,
   removeMovement,
+  removeSingleMovement,
   saveMonthlyClose,
   saveMovement,
   saveSettings,
@@ -323,11 +328,71 @@ export default function FinanceApp() {
   }
 
   async function handleClose(close: MonthlyClose) {
-    await saveMonthlyClose(close);
-    await queueAndSync("saveClosing", close);
+    const existing = data.closings.find((item) => item.month === close.month);
+    let finalClose = close;
+    if (!existing) {
+      const carryover = createForecastCarryovers(data.movements, close.month, close.closedAt);
+      for (const movement of carryover.upserts) {
+        await saveMovement(movement);
+        await queueCloudAction("saveMovement", movement);
+      }
+      finalClose = {
+        ...close,
+        snapshot: { ...close.snapshot, carriedForecasts: carryover.carriedForecasts },
+      };
+    }
+    await saveMonthlyClose(finalClose);
+    await queueCloudAction("saveClosing", finalClose);
+    if (cloud.mode !== "signedOut" && cloud.mode !== "codeSent" && cloud.mode !== "disabled") {
+      await flushCloudActions().catch(() => undefined);
+    }
     await refresh();
     setCloseOpen(false);
-    notify(`${monthLabel(close.month)} cerrado`);
+    const carriedCount = finalClose.snapshot.carriedForecasts?.length ?? 0;
+    notify(existing ? "Nota del cierre actualizada" : `${monthLabel(close.month)} cerrado${carriedCount > 0 ? ` · ${carriedCount} pendiente${carriedCount === 1 ? "" : "s"} acumulado${carriedCount === 1 ? "" : "s"}` : ""}`);
+  }
+
+  async function handleReopen(close: MonthlyClose) {
+    if (data.closings.some((item) => item.month > close.month)) {
+      notify("Reabre primero los meses posteriores para mantener los saldos enlazados");
+      return;
+    }
+
+    const reverted = revertForecastCarryovers(data.movements, close.snapshot.carriedForecasts ?? [], new Date().toISOString());
+    for (const movement of reverted.upserts) {
+      await saveMovement(movement);
+      await queueCloudAction("saveMovement", movement);
+    }
+    for (const targetId of reverted.deletes) {
+      const unlinked = await removeSingleMovement(targetId);
+      for (const movement of unlinked) await queueCloudAction("saveMovement", movement);
+      await queueCloudAction("deleteMovement", { id: targetId });
+    }
+
+    await removeMonthlyClose(close.id);
+    await queueCloudAction("deleteClosing", { id: close.id });
+    if (cloud.mode !== "signedOut" && cloud.mode !== "codeSent" && cloud.mode !== "disabled") {
+      await flushCloudActions().catch(() => undefined);
+    }
+    await refresh();
+    setCloseOpen(false);
+    notify(`${monthLabel(close.month)} reabierto para modificaciones`);
+  }
+
+  function requestAddMovement() {
+    if (data.closings.some((close) => close.month === selectedMonth)) {
+      notify("Reabre el mes antes de añadir movimientos");
+      return;
+    }
+    setEditingMovement(null);
+  }
+
+  function requestEditMovement(movement: Movement) {
+    if (data.closings.some((close) => close.month === movement.date.slice(0, 7))) {
+      notify("Reabre el mes antes de modificar sus movimientos");
+      return;
+    }
+    setEditingMovement(movement);
   }
 
   async function handleClear() {
@@ -409,11 +474,12 @@ export default function FinanceApp() {
               data={data}
               month={selectedMonth}
               onMonthChange={setSelectedMonth}
-              onAdd={() => setEditingMovement(null)}
-              onEdit={(movement) => setEditingMovement(movement)}
+              onAdd={requestAddMovement}
+              onEdit={requestEditMovement}
               onOpenMovements={() => setTab("movements")}
               onOpenAnalysis={() => setTab("analysis")}
               onCloseMonth={() => setCloseOpen(true)}
+              onReopenMonth={handleReopen}
               mounted={mounted}
               onSaveSettings={handleSettingsSave}
             />
@@ -422,8 +488,8 @@ export default function FinanceApp() {
               data={data}
               month={selectedMonth}
               onMonthChange={setSelectedMonth}
-              onAdd={() => setEditingMovement(null)}
-              onEdit={(movement) => setEditingMovement(movement)}
+              onAdd={requestAddMovement}
+              onEdit={requestEditMovement}
             />
           ) : tab === "analysis" ? (
             <AnalysisView data={data} month={selectedMonth} onMonthChange={setSelectedMonth} mounted={mounted} />
@@ -444,7 +510,7 @@ export default function FinanceApp() {
         <nav className="bottom-nav" aria-label="Navegación principal">
           <NavButton active={tab === "home"} label="Inicio" icon={LayoutDashboard} onClick={() => setTab("home")} />
           <NavButton active={tab === "movements"} label="Movimientos" icon={ListChecks} onClick={() => setTab("movements")} />
-          <button className="add-main" onClick={() => setEditingMovement(null)} aria-label="Añadir movimiento">
+          <button className="add-main" onClick={requestAddMovement} aria-label="Añadir movimiento">
             <Plus size={28} strokeWidth={2.3} />
           </button>
           <NavButton active={tab === "analysis"} label="Análisis" icon={BarChart3} onClick={() => setTab("analysis")} />
@@ -468,6 +534,7 @@ export default function FinanceApp() {
           <CloseMonthSheet
             month={selectedMonth}
             movements={data.movements}
+            closings={data.closings}
             existing={data.closings.find((close) => close.month === selectedMonth)}
             onClose={() => setCloseOpen(false)}
             onSave={handleClose}
@@ -555,7 +622,7 @@ function MonthSwitcher({ month, onChange }: { month: string; onChange: (month: s
   );
 }
 
-function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, onOpenAnalysis, onCloseMonth, mounted, onSaveSettings }: {
+function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, onOpenAnalysis, onCloseMonth, onReopenMonth, mounted, onSaveSettings }: {
   data: AppData;
   month: string;
   onMonthChange: (month: string) => void;
@@ -564,14 +631,15 @@ function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, 
   onOpenMovements: () => void;
   onOpenAnalysis: () => void;
   onCloseMonth: () => void;
+  onReopenMonth: (close: MonthlyClose) => void;
   mounted: boolean;
   onSaveSettings: (settings: AppSettings) => void;
 }) {
   const [openForecastMonth, setOpenForecastMonth] = useState<string | null>(null);
   const [customizing, setCustomizing] = useState(false);
   const [widgetDraft, setWidgetDraft] = useState<HomeWidgetId[]>(data.settings.homeWidgets ?? defaultHomeWidgets);
-  const current = snapshotForMonth(data.movements, month);
-  const projected = projectionForMonth(data.movements, month);
+  const current = snapshotWithCarryover(data.movements, data.closings, month);
+  const projected = projectionWithCarryover(data.movements, data.closings, month);
   const forecasts = forecastsForMonth(data.movements, month);
   const pendingOutCents = forecasts.filter((item) => item.forecast.kind !== "income").reduce((sum, item) => sum + item.remainingCents, 0);
   const monthlyMovements = movementsForMonth(data.movements, month);
@@ -701,9 +769,12 @@ function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, 
         <div className="close-icon">{closing ? <Check size={22} /> : <CalendarDays size={22} />}</div>
         <div>
           <h2>{closing ? "Mes cerrado" : "Cierra el mes cuando termines"}</h2>
-          <p>{closing ? `Guardaste esta fotografía el ${dayLabel(closing.closedAt.slice(0, 10))}.` : "Guarda el resultado y una nota para poder comparar tu evolución."}</p>
+          <p>{closing ? `Saldo y pendientes trasladados al mes siguiente el ${dayLabel(closing.closedAt.slice(0, 10))}.` : "Traslada el disponible y acumula las previsiones pendientes en el mes siguiente."}</p>
         </div>
-        <button onClick={onCloseMonth}>{closing ? "Ver" : "Cerrar mes"}</button>
+        <div className="close-actions">
+          <button onClick={onCloseMonth}>{closing ? "Ver cierre" : "Cerrar mes"}</button>
+          {closing && <button className="reopen-button" onClick={() => onReopenMonth(closing)}><RotateCcw size={15} /> Reabrir mes</button>}
+        </div>
       </section>
     </div>
   );
@@ -860,9 +931,9 @@ function MovementRow({ movement, movements, categories, onClick }: { movement: M
 function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; month: string; onMonthChange: (month: string) => void; mounted: boolean }) {
   const [period, setPeriod] = useState<AnalysisPeriod>("month");
   const [savingCut, setSavingCut] = useState(15);
-  const snapshot = snapshotForMonth(data.movements, month);
-  const projected = projectionForMonth(data.movements, month);
-  const previous = snapshotForMonth(data.movements, moveMonth(month, -1));
+  const snapshot = snapshotWithCarryover(data.movements, data.closings, month);
+  const projected = projectionWithCarryover(data.movements, data.closings, month);
+  const previous = snapshotWithCarryover(data.movements, data.closings, moveMonth(month, -1));
   const categories = categoryBreakdown(data.movements, data.categories, month);
   const nonEssential = categories.filter((item) => !item.essential);
   const reducible = nonEssential.reduce((sum, item) => sum + item.value, 0);
@@ -1295,24 +1366,28 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
   );
 }
 
-function CloseMonthSheet({ month, movements, existing, onClose, onSave }: {
+function CloseMonthSheet({ month, movements, closings, existing, onClose, onSave }: {
   month: string;
   movements: Movement[];
+  closings: MonthlyClose[];
   existing?: MonthlyClose;
   onClose: () => void;
   onSave: (close: MonthlyClose) => void;
 }) {
-  const snapshot = snapshotForMonth(movements, month);
+  const snapshot = existing?.snapshot ?? snapshotWithCarryover(movements, closings, month);
+  const pending = forecastsForMonth(movements, month).filter((item) => item.remainingCents > 0);
+  const pendingCents = pending.reduce((sum, item) => sum + item.remainingCents, 0);
+  const nextMonth = moveMonth(month, 1);
   const [notes, setNotes] = useState(existing?.notes ?? "");
   return (
     <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="sheet close-sheet" role="dialog" aria-modal="true" aria-label="Cerrar mes">
         <div className="sheet-handle" />
         <div className="sheet-heading"><div><span className="eyebrow">Fotografía mensual</span><h2>{monthLabel(month)}</h2></div><button onClick={onClose} aria-label="Cerrar"><X size={22} /></button></div>
-        <div className="close-summary"><div><span>Ingresos</span><strong>{formatMoney(snapshot.incomeCents)}</strong></div><div><span>Gastos</span><strong>{formatMoney(snapshot.expenseCents)}</strong></div><div><span>Ahorro</span><strong>{formatMoney(snapshot.savingCents)}</strong></div><div className="result"><span>Disponible</span><strong>{formatMoney(snapshot.resultCents)}</strong></div></div>
+        <div className="close-summary"><div><span>Ingresos</span><strong>{formatMoney(snapshot.incomeCents)}</strong></div><div><span>Gastos</span><strong>{formatMoney(snapshot.expenseCents)}</strong></div><div><span>Ahorro</span><strong>{formatMoney(snapshot.savingCents)}</strong></div>{(snapshot.openingBalanceCents ?? 0) !== 0 && <div className="opening"><span>Saldo inicial</span><strong>{formatMoney(snapshot.openingBalanceCents ?? 0)}</strong></div>}<div className="result"><span>Disponible para {monthLabel(nextMonth, "short")}</span><strong>{formatMoney(snapshot.resultCents)}</strong></div></div>
         <label className="field"><span>¿Cómo ha ido el mes?</span><textarea rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Ej. Gasté más en ocio por las vacaciones, pero mantuve el objetivo de ahorro." /></label>
-        <div className="snapshot-note"><ShieldCheck size={18} /><span>Se guardará este resumen para que puedas compararlo más adelante.</span></div>
-        <button className="primary-button full large" onClick={() => onSave({ id: existing?.id ?? crypto.randomUUID(), month, closedAt: new Date().toISOString(), notes: notes.trim(), snapshot })}><Check size={18} />{existing ? "Actualizar cierre" : "Guardar y cerrar el mes"}</button>
+        <div className="snapshot-note"><ShieldCheck size={18} /><span>{existing ? "El cierre está guardado. Reabre el mes desde Inicio si necesitas modificar sus movimientos." : `${formatMoney(snapshot.resultCents)} quedarán como saldo inicial de ${monthLabel(nextMonth, "short").toLowerCase()}. ${pending.length > 0 ? `${pending.length} previsión${pending.length === 1 ? "" : "es"} pendiente${pending.length === 1 ? "" : "s"} (${formatMoney(pendingCents)}) se acumulará${pending.length === 1 ? "" : "n"} por concepto.` : "No hay previsiones pendientes que trasladar."}`}</span></div>
+        <button className="primary-button full large" onClick={() => onSave({ id: existing?.id ?? crypto.randomUUID(), month, closedAt: existing?.closedAt ?? new Date().toISOString(), notes: notes.trim(), snapshot })}><Check size={18} />{existing ? "Guardar nota" : "Guardar y cerrar el mes"}</button>
       </section>
     </div>
   );
