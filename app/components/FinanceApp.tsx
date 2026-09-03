@@ -46,7 +46,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -618,12 +618,80 @@ function NavButton({ active, label, icon: Icon, onClick }: { active: boolean; la
   );
 }
 
-function MonthSwitcher({ month, onChange }: { month: string; onChange: (month: string) => void }) {
+function MonthSwitcher({ month, onChange, picker = false }: { month: string; onChange: (month: string) => void; picker?: boolean }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerYear, setPickerYear] = useState(Number(month.slice(0, 4)));
+  const pickerRef = useRef<HTMLDivElement>(null);
+  const pickerMonths = Array.from({ length: 12 }, (_, index) => `${pickerYear}-${String(index + 1).padStart(2, "0")}`);
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+
+    function closePicker(event: PointerEvent | KeyboardEvent) {
+      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+      if (event instanceof PointerEvent && pickerRef.current?.contains(event.target as Node)) return;
+      setPickerOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closePicker);
+    document.addEventListener("keydown", closePicker);
+    return () => {
+      document.removeEventListener("pointerdown", closePicker);
+      document.removeEventListener("keydown", closePicker);
+    };
+  }, [pickerOpen]);
+
+  function changeMonth(nextMonth: string) {
+    setPickerOpen(false);
+    onChange(nextMonth);
+  }
+
   return (
-    <div className="month-switcher">
-      <button onClick={() => onChange(moveMonth(month, -1))} aria-label="Mes anterior"><ArrowLeft size={18} /></button>
-      <div><CalendarDays size={16} /><strong>{monthLabel(month)}</strong></div>
-      <button onClick={() => onChange(moveMonth(month, 1))} aria-label="Mes siguiente"><ArrowRight size={18} /></button>
+    <div className="month-switcher-shell" ref={picker ? pickerRef : undefined}>
+      <div className="month-switcher">
+        <button onClick={() => changeMonth(moveMonth(month, -1))} aria-label="Mes anterior"><ArrowLeft size={18} /></button>
+        {picker ? (
+          <button
+            className="month-switcher-label"
+            type="button"
+            aria-expanded={pickerOpen}
+            aria-haspopup="dialog"
+            onClick={() => {
+              if (!pickerOpen) setPickerYear(Number(month.slice(0, 4)));
+              setPickerOpen((open) => !open);
+            }}
+          >
+            <CalendarDays size={16} />
+            <strong>{monthLabel(month)}</strong>
+            <ChevronDown className={pickerOpen ? "open" : ""} size={16} />
+          </button>
+        ) : (
+          <div><CalendarDays size={16} /><strong>{monthLabel(month)}</strong></div>
+        )}
+        <button onClick={() => changeMonth(moveMonth(month, 1))} aria-label="Mes siguiente"><ArrowRight size={18} /></button>
+      </div>
+      {picker && pickerOpen && (
+        <div className="month-picker" role="dialog" aria-label="Seleccionar mes">
+          <div className="month-picker-heading">
+            <button type="button" onClick={() => setPickerYear((year) => year - 1)} aria-label="Año anterior"><ArrowLeft size={17} /></button>
+            <strong>{pickerYear}</strong>
+            <button type="button" onClick={() => setPickerYear((year) => year + 1)} aria-label="Año siguiente"><ArrowRight size={17} /></button>
+          </div>
+          <div className="month-picker-grid">
+            {pickerMonths.map((pickerMonth) => (
+              <button
+                key={pickerMonth}
+                type="button"
+                className={pickerMonth === month ? "active" : ""}
+                aria-current={pickerMonth === month ? "date" : undefined}
+                onClick={() => changeMonth(pickerMonth)}
+              >
+                {monthLabel(pickerMonth, "short")}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -667,7 +735,7 @@ function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, 
 
   return (
     <div className="view-stack">
-      <MonthSwitcher month={month} onChange={onMonthChange} />
+      <MonthSwitcher month={month} onChange={onMonthChange} picker />
       <button className="customize-home-button" type="button" onClick={() => { setWidgetDraft(widgets); setCustomizing((value) => !value); }}><SlidersHorizontal size={17} /> Personalizar Inicio</button>
       {customizing && <HomeWidgetEditor selected={widgetDraft} onToggle={toggleWidget} onSave={() => { onSaveSettings({ ...data.settings, homeWidgets: widgetDraft, updatedAt: new Date().toISOString() }); setCustomizing(false); }} />}
       {show("balance") && <section className="hero-card">
