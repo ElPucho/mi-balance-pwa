@@ -1399,7 +1399,7 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
         </div>
         <label className="amount-field"><span>Importe</span><div><input autoFocus inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0,00" /><b>€</b></div></label>
         <label className="field"><span>Concepto</span><input value={concept} onChange={(event) => setConcept(event.target.value)} placeholder={kind === "expense" ? "Ej. Supermercado" : kind === "income" ? "Ej. Nómina" : "Ej. Fondo de emergencia"} /></label>
-        <div className="field-pair">
+        <div className="field-pair movement-date-category">
           <label className="field"><span>Fecha</span><input type="date" value={date} onChange={(event) => { setDate(event.target.value); setForecastId(""); }} disabled={lockedForecast} /></label>
           <label className="field"><span>Categoría</span><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>{availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
         </div>
