@@ -16,6 +16,12 @@ export type FundingPlanProgress = {
   progress: number;
 };
 
+export type ForecastCarryoverRequest = {
+  sourceForecastId: string;
+  targetMonth: string;
+  amountCents: number;
+};
+
 export const money = new Intl.NumberFormat("es-ES", {
   style: "currency",
   currency: "EUR",
@@ -223,20 +229,37 @@ function bestCarryoverTargetIndex(movements: Movement[], source: Movement, nextM
   return bestIndex;
 }
 
-export function createForecastCarryovers(movements: Movement[], key: string, timestamp: string) {
+export function findForecastCarryoverTarget(movements: Movement[], source: Movement, targetMonth: string) {
+  const targetIndex = bestCarryoverTargetIndex(movements, source, targetMonth);
+  return targetIndex >= 0 ? movements[targetIndex] : undefined;
+}
+
+export function createForecastCarryovers(
+  movements: Movement[],
+  key: string,
+  timestamp: string,
+  requests?: ForecastCarryoverRequest[],
+) {
   const nextMonth = moveMonth(key, 1);
   const working = [...movements];
   const upserts = new Map<string, Movement>();
   const carriedForecasts: ForecastCarryover[] = [];
+  const requestedByForecast = requests ? new Map(requests.map((request) => [request.sourceForecastId, request])) : null;
 
   for (const usage of forecastsForMonth(movements, key).filter((item) => item.remainingCents > 0)) {
-    const existingIndex = bestCarryoverTargetIndex(working, usage.forecast, nextMonth);
+    const request = requestedByForecast?.get(usage.forecast.id);
+    if (requestedByForecast && !request) continue;
+    const targetMonth = request?.targetMonth ?? nextMonth;
+    const amountCents = Math.min(usage.remainingCents, Math.max(0, request?.amountCents ?? usage.remainingCents));
+    if (targetMonth < nextMonth || amountCents === 0) continue;
+
+    const existingIndex = bestCarryoverTargetIndex(working, usage.forecast, targetMonth);
     let target: Movement;
 
     if (existingIndex >= 0) {
       target = {
         ...working[existingIndex],
-        amountCents: working[existingIndex].amountCents + usage.remainingCents,
+        amountCents: working[existingIndex].amountCents + amountCents,
         updatedAt: timestamp,
       };
       working[existingIndex] = target;
@@ -244,8 +267,8 @@ export function createForecastCarryovers(movements: Movement[], key: string, tim
       target = {
         ...usage.forecast,
         id: crypto.randomUUID(),
-        amountCents: usage.remainingCents,
-        date: dateForMonth(usage.forecast.date, nextMonth),
+        amountCents,
+        date: dateForMonth(usage.forecast.date, targetMonth),
         status: "planned",
         forecastId: undefined,
         createdAt: timestamp,
@@ -258,7 +281,7 @@ export function createForecastCarryovers(movements: Movement[], key: string, tim
     carriedForecasts.push({
       sourceForecastId: usage.forecast.id,
       targetMovementId: target.id,
-      amountCents: usage.remainingCents,
+      amountCents,
     });
   }
 
