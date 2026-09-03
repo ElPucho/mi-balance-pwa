@@ -22,6 +22,27 @@ export type ForecastCarryoverRequest = {
   amountCents: number;
 };
 
+export type TwelveMonthProjection = {
+  key: string;
+  name: string;
+  openingBalanceCents: number;
+  incomeCents: number;
+  expenseCents: number;
+  savingCents: number;
+  provisionedExpenseCents: number;
+  endingBalanceCents: number;
+  movementCount: number;
+  closed: boolean;
+};
+
+export type PurchaseSimulation = {
+  months: TwelveMonthProjection[];
+  targetMonth: TwelveMonthProjection;
+  lowestMonth: TwelveMonthProjection;
+  installmentCount: number;
+  monthlyProvisionCents: number;
+};
+
 export const money = new Intl.NumberFormat("es-ES", {
   style: "currency",
   currency: "EUR",
@@ -415,12 +436,10 @@ export function annualProjectionSeries(movements: Movement[], closings: MonthlyC
 export function annualCumulativeProjectionSeries(movements: Movement[], closings: MonthlyClose[], year: number, today = new Date()) {
   let income = 0;
   let expense = 0;
-  let saving = 0;
   let result = 0;
   return annualProjectionSeries(movements, closings, year, today).map((item) => {
     income += item.ingresosPrevistos;
     expense += item.gastosPrevistos;
-    saving += item.ahorroPrevisto;
     result += item.resultadoPrevisto;
     return {
       key: item.key,
@@ -430,6 +449,94 @@ export function annualCumulativeProjectionSeries(movements: Movement[], closings
       disponibleAcumulado: result,
     };
   });
+}
+
+function openingBalanceForProjection(
+  movements: Movement[],
+  closings: MonthlyClose[],
+  startMonth: string,
+  currentMonth: string,
+) {
+  if (startMonth <= currentMonth) return openingBalanceForMonth(closings, startMonth);
+
+  let cursor = currentMonth;
+  let balanceCents = openingBalanceForMonth(closings, currentMonth);
+  while (cursor < startMonth) {
+    const closing = closings.find((item) => item.month === cursor);
+    balanceCents = closing?.snapshot.resultCents ?? balanceCents + projectionForMonth(movements, cursor).resultCents;
+    cursor = moveMonth(cursor, 1);
+  }
+  return balanceCents;
+}
+
+export function twelveMonthProjection(
+  movements: Movement[],
+  closings: MonthlyClose[],
+  startMonth: string,
+  today = new Date(),
+) {
+  const currentMonth = monthKey(today);
+  let openingBalanceCents = openingBalanceForProjection(movements, closings, startMonth, currentMonth);
+
+  return Array.from({ length: 12 }, (_, index): TwelveMonthProjection => {
+    const key = moveMonth(startMonth, index);
+    const closing = closings.find((item) => item.month === key);
+    const projection = closing?.snapshot ?? projectionForMonth(movements, key);
+    const monthOpeningCents = closing?.snapshot.openingBalanceCents ?? openingBalanceCents;
+    const endingBalanceCents = closing?.snapshot.resultCents ?? monthOpeningCents + projection.resultCents;
+    const item = {
+      key,
+      name: monthLabel(key, "short").replace(".", ""),
+      openingBalanceCents: monthOpeningCents,
+      incomeCents: projection.incomeCents,
+      expenseCents: projection.expenseCents,
+      savingCents: projection.savingCents,
+      provisionedExpenseCents: projection.fundingUsedCents,
+      endingBalanceCents,
+      movementCount: projection.movementCount,
+      closed: Boolean(closing),
+    };
+    openingBalanceCents = endingBalanceCents;
+    return item;
+  });
+}
+
+function monthDistance(fromMonth: string, toMonth: string) {
+  const from = dateFromMonth(fromMonth);
+  const to = dateFromMonth(toMonth);
+  return (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth();
+}
+
+export function simulatePurchase(
+  projection: TwelveMonthProjection[],
+  startMonth: string,
+  targetMonth: string,
+  amountCents: number,
+): PurchaseSimulation | null {
+  const target = projection.find((item) => item.key === targetMonth);
+  const safeAmountCents = Math.max(0, amountCents);
+  if (!target || safeAmountCents === 0) return null;
+
+  const months = projection.map((item) => {
+    if (item.key < targetMonth) return item;
+    return {
+      ...item,
+      openingBalanceCents: item.openingBalanceCents - (item.key > targetMonth ? safeAmountCents : 0),
+      expenseCents: item.expenseCents + (item.key === targetMonth ? safeAmountCents : 0),
+      endingBalanceCents: item.endingBalanceCents - safeAmountCents,
+    };
+  });
+  const simulatedTarget = months.find((item) => item.key === targetMonth)!;
+  const lowestMonth = months.reduce((lowest, item) => item.endingBalanceCents < lowest.endingBalanceCents ? item : lowest);
+  const installmentCount = Math.max(0, monthDistance(startMonth, targetMonth));
+
+  return {
+    months,
+    targetMonth: simulatedTarget,
+    lowestMonth,
+    installmentCount,
+    monthlyProvisionCents: installmentCount > 0 ? Math.ceil(safeAmountCents / installmentCount) : safeAmountCents,
+  };
 }
 
 export function parseAmount(value: string) {
