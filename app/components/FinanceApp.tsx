@@ -83,11 +83,12 @@ import {
   parseAmount,
   projectionWithCarryover,
   revertForecastCarryovers,
+  savingsAnalysis,
   simulatePurchase,
   snapshotWithCarryover,
   twelveMonthProjection,
 } from "../lib/finance";
-import type { ForecastCarryoverRequest } from "../lib/finance";
+import type { ForecastCarryoverRequest, SavingsAnalysis } from "../lib/finance";
 import {
   cloudConfigured,
   disconnectCloud,
@@ -1020,6 +1021,7 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
   const series = annualSeries(data.movements, year);
   const projectionSeries = annualProjectionSeries(data.movements, data.closings, year);
   const cumulativeSeries = annualCumulativeProjectionSeries(data.movements, data.closings, year);
+  const savingInsights = savingsAnalysis(data.movements, data.categories, month);
   const finalCumulative = cumulativeSeries[cumulativeSeries.length - 1];
   const yearTotals = series.reduce((totals, item) => ({ income: totals.income + item.ingresos, expense: totals.expense + item.gastos, saving: totals.saving + item.ahorro, result: totals.result + item.resultado }), { income: 0, expense: 0, saving: 0, result: 0 });
   const yearProjectionTotals = projectionSeries.reduce(
@@ -1047,9 +1049,10 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
           <MonthSwitcher month={month} onChange={onMonthChange} />
           <div className="metric-grid triple">
             <MetricCard label="Gastos" value={formatMoney(snapshot.expenseCents)} foot={previous.expenseCents > 0 ? `${Math.abs(expenseChange).toFixed(0)}% ${expenseChange <= 0 ? "menos" : "más"} que el mes anterior` : "Sin comparación anterior"} tone={expenseChange <= 0 ? "good" : "warn"} />
-            <MetricCard label="Tasa de ahorro" value={snapshot.incomeCents > 0 ? `${Math.round((snapshot.savingCents / snapshot.incomeCents) * 100)}%` : "0%"} foot={`Has apartado ${formatMoney(snapshot.savingCents)}`} tone="good" />
+            <MetricCard label="Ahorro real" value={savingInsights.actualSavings.ratePercent === null ? "—" : `${Math.round(savingInsights.actualSavings.ratePercent)}%`} foot={savingInsights.actualSavings.ratePercent === null ? "Añade ingresos para calcularlo" : `${formatMoney(savingInsights.actualSavings.savedCents)} después de gastos`} tone={savingInsights.actualSavings.savedCents >= 0 ? "good" : "warn"} />
             <MetricCard label="Cierre previsto" value={formatMoney(projected.resultCents)} foot={`Hoy tienes ${formatMoney(snapshot.resultCents)}`} tone={projected.resultCents >= 0 ? "good" : "warn"} />
           </div>
+          <SavingsInsights analysis={savingInsights} month={month} />
           <section className="section-card chart-card">
             <div className="section-heading"><div><span className="eyebrow">Real + pendiente</span><h2>Cómo puede terminar el mes</h2></div></div>
             {mounted && <ResponsiveContainer width="100%" height={220}><BarChart data={forecastComparison} margin={{ top: 8, right: 4, left: -24, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Bar dataKey="real" name="Realizado" fill="#a8b1c1" radius={[5, 5, 0, 0]} /><Bar dataKey="cierre" name="Cierre estimado" fill="#5b6ee1" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer>}
@@ -1108,6 +1111,106 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
         <TwelveMonthPlanningView data={data} startMonth={month} onStartMonthChange={onMonthChange} mounted={mounted} />
       )}
     </div>
+  );
+}
+
+function SavingsInsights({ analysis, month }: { analysis: SavingsAnalysis; month: string }) {
+  const { actualSavings, forecastComparisons, categoryTrends, recurringDiscretionary, repeatedForecastOverruns, expenseAverages } = analysis;
+
+  return (
+    <section className="section-card savings-insights">
+      <div className="section-heading">
+        <div><span className="eyebrow">Datos que explican cada consejo</span><h2>Análisis para ahorrar mejor</h2></div>
+      </div>
+
+      <div className="savings-summary-grid">
+        <div className={`real-saving-card ${actualSavings.savedCents >= 0 ? "positive" : "negative"}`}>
+          <span><PiggyBank size={18} /> Porcentaje real de ahorro</span>
+          <strong>{actualSavings.ratePercent === null ? "No calculable" : `${Math.round(actualSavings.ratePercent)}%`}</strong>
+          <p>{actualSavings.ratePercent === null
+            ? "Registra algún ingreso para poder compararlo con los gastos reales."
+            : `${formatMoney(actualSavings.incomeCents)} de ingresos − ${formatMoney(actualSavings.expenseCents)} de gastos = ${formatMoney(actualSavings.savedCents)}.`}</p>
+        </div>
+        <div className="average-comparison-card">
+          <div><BarChart3 size={18} /><span><strong>Comparación con tu media</strong><small>Gasto real de {monthLabel(month, "short").toLowerCase()} frente a meses anteriores.</small></span></div>
+          <div className="average-comparison-grid">
+            {expenseAverages.map((average) => (
+              <span key={average.months}>
+                <small>Media {average.months} meses</small>
+                <strong>{average.averageCents === null ? "—" : formatMoney(average.averageCents)}</strong>
+                <em>{average.averageCents === null || average.differenceCents === null
+                  ? "Sin histórico"
+                  : average.differenceCents === 0
+                    ? "Igual que la media"
+                    : `${formatMoney(Math.abs(average.differenceCents))} ${average.differenceCents > 0 ? "más" : "menos"}${average.differencePercent === null ? "" : ` (${Math.abs(Math.round(average.differencePercent))}%)`}`}</em>
+                {average.observedMonths > 0 && average.observedMonths < average.months && <b>Con {average.observedMonths} mes{average.observedMonths === 1 ? "" : "es"} disponible{average.observedMonths === 1 ? "" : "s"}</b>}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="saving-insight-group">
+        <div className="saving-insight-heading"><span><Target size={18} /></span><div><strong>Previsto frente a gastado por concepto</strong><small>Solo cuenta los gastos que has asociado a cada previsión.</small></div></div>
+        {forecastComparisons.length === 0 ? <p className="saving-insight-empty">No hay previsiones de gasto en este mes para comparar.</p> : (
+          <div className="saving-insight-list">
+            {forecastComparisons.slice(0, 5).map((item) => (
+              <div className="forecast-analysis-row" key={item.key}>
+                <div><strong>{item.concept}</strong><small>Previsto {formatMoney(item.plannedCents)} · Gastado {formatMoney(item.spentCents)}</small></div>
+                <span className={item.varianceCents > 0 ? "negative" : item.spentCents > 0 ? "positive" : "neutral"}>
+                  <strong>{item.spentCents === 0 ? "Sin ejecutar" : item.varianceCents > 0 ? `${formatMoney(item.varianceCents)} de exceso` : item.varianceCents < 0 ? `${formatMoney(Math.abs(item.varianceCents))} por debajo` : "Según lo previsto"}</strong>
+                  <small>{Math.round(item.progressPercent)}% consumido</small>
+                </span>
+                <i><em className={item.varianceCents > 0 ? "over" : ""} style={{ width: `${Math.min(100, item.progressPercent)}%` }} /></i>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="saving-insight-group">
+        <div className="saving-insight-heading"><span><TrendingUp size={18} /></span><div><strong>Categorías que llevan varios meses subiendo</strong><small>Señala únicamente subidas durante tres o más meses consecutivos.</small></div></div>
+        {categoryTrends.length === 0 ? <p className="saving-insight-empty">No hay ninguna categoría con tres meses consecutivos de subida.</p> : (
+          <div className="saving-insight-list">
+            {categoryTrends.slice(0, 4).map((item) => (
+              <div className="saving-signal-row" key={item.categoryId}>
+                <i style={{ background: item.color }} />
+                <span><strong>{item.name}</strong><small>{item.streakMonths} meses al alza: {formatMoney(item.startCents)} → {formatMoney(item.currentCents)}</small><em>Volver al nivel del mes anterior liberaría {formatMoney(item.currentCents - item.previousCents)}.</em></span>
+                <b>+{Math.round(item.increasePercent)}%</b>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="saving-insight-group">
+        <div className="saving-insight-heading"><span><RefreshCw size={18} /></span><div><strong>Gastos prescindibles recurrentes</strong><small>Conceptos de categorías no esenciales presentes en tres o más meses.</small></div></div>
+        {recurringDiscretionary.length === 0 ? <p className="saving-insight-empty">Todavía no hay gastos prescindibles repetidos durante al menos tres meses.</p> : (
+          <div className="saving-insight-list">
+            {recurringDiscretionary.slice(0, 4).map((item) => (
+              <div className="saving-signal-row recurring" key={item.key}>
+                <span><strong>{item.concept}</strong><small>{item.categoryName} · aparece en {item.activeMonths} de {item.windowMonths} meses</small><em>Reducirlo por completo liberaría unos {formatMoney(item.annualPotentialCents)} al año.</em></span>
+                <b>{formatMoney(item.monthlyAverageCents)}<small>/mes</small></b>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="saving-insight-group">
+        <div className="saving-insight-heading"><span><TrendingDown size={18} /></span><div><strong>Previsiones que sueles sobrepasar</strong><small>Exige al menos dos excesos y que ocurran en la mitad de las ejecuciones.</small></div></div>
+        {repeatedForecastOverruns.length === 0 ? <p className="saving-insight-empty">No hay conceptos que se superen habitualmente con suficiente histórico.</p> : (
+          <div className="saving-insight-list">
+            {repeatedForecastOverruns.slice(0, 4).map((item) => (
+              <div className="saving-signal-row overrun" key={item.key}>
+                <span><strong>{item.concept}</strong><small>Superada {item.overrunCount} de {item.executionCount} veces · previsión media {formatMoney(item.averagePlannedCents)}</small><em>El gasto real medio es {formatMoney(item.averageSpentCents)}; ajusta la previsión o reduce unos {formatMoney(item.averageOverrunCents)}.</em></span>
+                <b>+{formatMoney(item.averageOverrunCents)}</b>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
