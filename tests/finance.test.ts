@@ -6,11 +6,12 @@ import {
   forecastUsage,
   movementDisplayAmountCents,
   revertForecastCarryovers,
+  savingsAnalysis,
   simulatePurchase,
   snapshotWithCarryover,
   twelveMonthProjection,
 } from "../app/lib/finance.ts";
-import type { MonthlyClose, Movement } from "../app/lib/types.ts";
+import type { Category, MonthlyClose, Movement } from "../app/lib/types.ts";
 
 const forecast: Movement = {
   id: "forecast-1",
@@ -345,5 +346,59 @@ test("el simulador descuenta una compra desde el mes elegido y calcula la aporta
   assert.equal(simulation.lowestMonth.key, "2026-11");
   assert.equal(simulation.installmentCount, 2);
   assert.equal(simulation.monthlyProvisionCents, 6_000);
+});
+
+test("el análisis de ahorro explica previsiones, tendencias, recurrencias y medias", () => {
+  const categories: Category[] = [
+    { id: "leisure", name: "Ocio", kind: "expense", color: "#ef6c67", icon: "sparkles" },
+    { id: "salary", name: "Nómina", kind: "income", color: "#129775", icon: "wallet", essential: true },
+  ];
+  const monthlyForecasts = [
+    { id: "forecast-jan", date: "2026-01-10", amountCents: 10_000 },
+    { id: "forecast-feb", date: "2026-02-10", amountCents: 10_000 },
+    { id: "forecast-mar", date: "2026-03-10", amountCents: 10_000 },
+  ].map((item): Movement => ({
+    ...forecast,
+    ...item,
+    concept: "Comidas fuera",
+    categoryId: "leisure",
+  }));
+  const actualAmounts = [12_000, 13_000, 15_000];
+  const actuals = monthlyForecasts.map((item, index): Movement => ({
+    ...item,
+    id: `actual-${index + 1}`,
+    amountCents: actualAmounts[index],
+    status: "confirmed",
+    forecastId: item.id,
+  }));
+  const income: Movement = {
+    ...forecast,
+    id: "income-mar",
+    concept: "Nómina",
+    amountCents: 100_000,
+    date: "2026-03-01",
+    categoryId: "salary",
+    kind: "income",
+    status: "confirmed",
+  };
+
+  const analysis = savingsAnalysis([...monthlyForecasts, ...actuals, income], categories, "2026-03");
+
+  assert.equal(analysis.actualSavings.savedCents, 85_000);
+  assert.equal(analysis.actualSavings.ratePercent, 85);
+  assert.deepEqual(
+    analysis.forecastComparisons.map(({ concept, plannedCents, spentCents, varianceCents }) => ({ concept, plannedCents, spentCents, varianceCents })),
+    [{ concept: "Comidas fuera", plannedCents: 10_000, spentCents: 15_000, varianceCents: 5_000 }],
+  );
+  assert.equal(analysis.categoryTrends[0].name, "Ocio");
+  assert.equal(analysis.categoryTrends[0].streakMonths, 3);
+  assert.equal(analysis.recurringDiscretionary[0].activeMonths, 3);
+  assert.equal(analysis.recurringDiscretionary[0].monthlyAverageCents, 13_333);
+  assert.equal(analysis.repeatedForecastOverruns[0].overrunCount, 3);
+  assert.equal(analysis.repeatedForecastOverruns[0].averageOverrunCents, 3_333);
+  assert.equal(analysis.expenseAverages[0].observedMonths, 2);
+  assert.equal(analysis.expenseAverages[0].averageCents, 12_500);
+  assert.equal(analysis.expenseAverages[0].differenceCents, 2_500);
+  assert.equal(analysis.expenseAverages[0].differencePercent, 20);
 });
 
