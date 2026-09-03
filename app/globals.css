@@ -1574,6 +1574,7 @@ textarea:focus-visible {
 
 .field {
   display: grid;
+  min-width: 0;
   gap: 7px;
 }
 
@@ -1597,6 +1598,8 @@ textarea:focus-visible {
 .money-input,
 .amount-field > div {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid #dfe4ec;
   border-radius: 13px;
   background: #fafbfc;
@@ -1606,6 +1609,37 @@ textarea:focus-visible {
 .field select {
   height: 45px;
   padding: 0 12px;
+}
+
+.movement-date-category {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 13px;
+}
+
+.movement-date-category input[type="date"] {
+  display: block;
+  inline-size: 100% !important;
+  min-inline-size: 0 !important;
+  max-inline-size: 100% !important;
+  box-sizing: border-box;
+}
+
+.movement-date-category input[type="date"]::-webkit-date-and-time-value {
+  min-inline-size: 0;
+  text-align: left;
+}
+
+.movement-date-category select {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (min-width: 520px) {
+  .movement-date-category {
+    grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+    gap: 10px;
+  }
 }
 
 .field textarea {
