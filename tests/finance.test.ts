@@ -118,6 +118,56 @@ test("el cierre acumula únicamente lo pendiente en el mismo concepto del mes si
   assert.deepEqual(result.carriedForecasts, [{ sourceForecastId: forecast.id, targetMovementId: nextForecast.id, amountCents: 4_000 }]);
 });
 
+test("el asistente permite trasladar solo una parte a un mes posterior elegido", () => {
+  const octoberForecast: Movement = {
+    ...forecast,
+    id: "forecast-october",
+    amountCents: 5_000,
+    date: "2026-10-20",
+  };
+  const result = createForecastCarryovers(
+    [forecast, octoberForecast],
+    "2026-08",
+    "2026-08-31T20:00:00.000Z",
+    [{ sourceForecastId: forecast.id, targetMonth: "2026-10", amountCents: 3_000 }],
+  );
+
+  assert.equal(result.upserts.length, 1);
+  assert.equal(result.upserts[0].id, octoberForecast.id);
+  assert.equal(result.upserts[0].amountCents, 8_000);
+  assert.deepEqual(result.carriedForecasts, [{ sourceForecastId: forecast.id, targetMovementId: octoberForecast.id, amountCents: 3_000 }]);
+});
+
+test("el asistente no traslada las previsiones marcadas para omitir", () => {
+  const anotherForecast: Movement = {
+    ...forecast,
+    id: "forecast-2",
+    concept: "Otra compra",
+  };
+  const result = createForecastCarryovers(
+    [forecast, anotherForecast],
+    "2026-08",
+    "2026-08-31T20:00:00.000Z",
+    [{ sourceForecastId: forecast.id, targetMonth: "2026-09", amountCents: 4_000 }],
+  );
+
+  assert.equal(result.upserts.length, 1);
+  assert.equal(result.carriedForecasts.length, 1);
+  assert.equal(result.carriedForecasts[0].sourceForecastId, forecast.id);
+});
+
+test("el asistente impide trasladar una previsión al mismo mes que se cierra", () => {
+  const result = createForecastCarryovers(
+    [forecast],
+    "2026-08",
+    "2026-08-31T20:00:00.000Z",
+    [{ sourceForecastId: forecast.id, targetMonth: "2026-08", amountCents: 4_000 }],
+  );
+
+  assert.equal(result.upserts.length, 0);
+  assert.equal(result.carriedForecasts.length, 0);
+});
+
 test("el cierre acumula el mismo concepto aunque la categoría haya cambiado", () => {
   const augustClothes: Movement = {
     ...forecast,
