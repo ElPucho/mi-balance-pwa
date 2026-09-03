@@ -43,6 +43,60 @@ export type PurchaseSimulation = {
   monthlyProvisionCents: number;
 };
 
+export type SavingsAnalysis = {
+  actualSavings: {
+    incomeCents: number;
+    expenseCents: number;
+    savedCents: number;
+    ratePercent: number | null;
+  };
+  forecastComparisons: Array<{
+    key: string;
+    concept: string;
+    plannedCents: number;
+    spentCents: number;
+    varianceCents: number;
+    progressPercent: number;
+  }>;
+  categoryTrends: Array<{
+    categoryId: string;
+    name: string;
+    color: string;
+    streakMonths: number;
+    startCents: number;
+    previousCents: number;
+    currentCents: number;
+    increaseCents: number;
+    increasePercent: number;
+  }>;
+  recurringDiscretionary: Array<{
+    key: string;
+    concept: string;
+    categoryName: string;
+    activeMonths: number;
+    windowMonths: number;
+    totalCents: number;
+    monthlyAverageCents: number;
+    annualPotentialCents: number;
+  }>;
+  repeatedForecastOverruns: Array<{
+    key: string;
+    concept: string;
+    executionCount: number;
+    overrunCount: number;
+    averagePlannedCents: number;
+    averageSpentCents: number;
+    averageOverrunCents: number;
+  }>;
+  expenseAverages: Array<{
+    months: 3 | 6 | 12;
+    observedMonths: number;
+    averageCents: number | null;
+    differenceCents: number | null;
+    differencePercent: number | null;
+  }>;
+};
+
 export const money = new Intl.NumberFormat("es-ES", {
   style: "currency",
   currency: "EUR",
@@ -354,6 +408,204 @@ export function annualSeries(movements: Movement[], year: number) {
       resultado: snapshot.resultCents / 100,
     };
   });
+}
+
+function monthsEndingAt(month: string, count: number) {
+  return Array.from({ length: count }, (_, index) => moveMonth(month, index - count + 1));
+}
+
+export function savingsAnalysis(movements: Movement[], categories: Category[], month: string): SavingsAnalysis {
+  const currentMovements = movementsForMonth(movements, month).filter((movement) => movement.status === "confirmed");
+  const incomeCents = currentMovements.filter((movement) => movement.kind === "income").reduce((sum, movement) => sum + movement.amountCents, 0);
+  const expenseCents = currentMovements.filter((movement) => movement.kind === "expense").reduce((sum, movement) => sum + movement.amountCents, 0);
+  const savedCents = incomeCents - expenseCents;
+  const firstConfirmedMonth = movements
+    .filter((movement) => movement.status === "confirmed")
+    .map((movement) => movement.date.slice(0, 7))
+    .sort()[0];
+
+  const comparisonGroups = new Map<string, SavingsAnalysis["forecastComparisons"][number]>();
+  for (const forecast of movementsForMonth(movements, month).filter((movement) => movement.status === "planned" && movement.kind === "expense")) {
+    const key = normalizedConcept(forecast.concept);
+    const usage = forecastUsage(movements, forecast);
+    const current = comparisonGroups.get(key) ?? {
+      key,
+      concept: forecast.concept.trim(),
+      plannedCents: 0,
+      spentCents: 0,
+      varianceCents: 0,
+      progressPercent: 0,
+    };
+    current.plannedCents += forecast.amountCents;
+    current.spentCents += usage.appliedCents;
+    current.varianceCents = current.spentCents - current.plannedCents;
+    current.progressPercent = current.plannedCents > 0 ? (current.spentCents / current.plannedCents) * 100 : 0;
+    comparisonGroups.set(key, current);
+  }
+  const forecastComparisons = [...comparisonGroups.values()].sort(
+    (a, b) => Math.max(0, b.varianceCents) - Math.max(0, a.varianceCents) || b.spentCents - a.spentCents,
+  );
+
+  const trendMonths = monthsEndingAt(month, 6);
+  const categoryIds = new Set([
+    ...categories.filter((category) => category.kind === "expense").map((category) => category.id),
+    ...movements
+      .filter((movement) => movement.kind === "expense" && trendMonths.includes(movement.date.slice(0, 7)))
+      .map((movement) => movement.categoryId),
+  ]);
+  const categoryTrends: SavingsAnalysis["categoryTrends"] = [];
+  for (const categoryId of categoryIds) {
+    const values = trendMonths.map((key) => movementsForMonth(movements, key)
+      .filter((movement) => movement.kind === "expense" && movement.status === "confirmed" && movement.categoryId === categoryId)
+      .reduce((sum, movement) => sum + movement.amountCents, 0));
+    let streakMonths = 1;
+    for (let index = values.length - 1; index > 0; index -= 1) {
+      if (values[index - 1] <= 0 || values[index] <= values[index - 1]) break;
+      streakMonths += 1;
+    }
+    if (streakMonths < 3) continue;
+    const startCents = values[values.length - streakMonths];
+    const currentCents = values[values.length - 1];
+    const category = categories.find((item) => item.id === categoryId);
+    categoryTrends.push({
+      categoryId,
+      name: category?.name ?? "Sin categoría",
+      color: category?.color ?? "#8190a5",
+      streakMonths,
+      startCents,
+      previousCents: values[values.length - 2],
+      currentCents,
+      increaseCents: currentCents - startCents,
+      increasePercent: startCents > 0 ? ((currentCents - startCents) / startCents) * 100 : 0,
+    });
+  }
+  categoryTrends.sort((a, b) => b.increaseCents - a.increaseCents);
+
+  const recurringMonths = monthsEndingAt(month, 6).filter((key) => !firstConfirmedMonth || key >= firstConfirmedMonth);
+  const categoryById = new Map(categories.map((category) => [category.id, category]));
+  const recurringGroups = new Map<string, {
+    concept: string;
+    categoryName: string;
+    months: Set<string>;
+    totalCents: number;
+    latestDate: string;
+  }>();
+  for (const movement of movements) {
+    const movementMonth = movement.date.slice(0, 7);
+    const category = categoryById.get(movement.categoryId);
+    if (
+      movement.kind !== "expense" ||
+      movement.status !== "confirmed" ||
+      !recurringMonths.includes(movementMonth) ||
+      category?.essential === true
+    ) continue;
+    const key = normalizedConcept(movement.concept);
+    const current = recurringGroups.get(key) ?? {
+      concept: movement.concept.trim(),
+      categoryName: category?.name ?? "Sin categoría",
+      months: new Set<string>(),
+      totalCents: 0,
+      latestDate: movement.date,
+    };
+    current.months.add(movementMonth);
+    current.totalCents += movement.amountCents;
+    if (movement.date >= current.latestDate) {
+      current.concept = movement.concept.trim();
+      current.categoryName = category?.name ?? "Sin categoría";
+      current.latestDate = movement.date;
+    }
+    recurringGroups.set(key, current);
+  }
+  const recurringDiscretionary = [...recurringGroups.entries()]
+    .filter(([, item]) => item.months.size >= 3)
+    .map(([key, item]) => {
+      const monthlyAverageCents = recurringMonths.length > 0 ? Math.round(item.totalCents / recurringMonths.length) : 0;
+      return {
+        key,
+        concept: item.concept,
+        categoryName: item.categoryName,
+        activeMonths: item.months.size,
+        windowMonths: recurringMonths.length,
+        totalCents: item.totalCents,
+        monthlyAverageCents,
+        annualPotentialCents: monthlyAverageCents * 12,
+      };
+    })
+    .sort((a, b) => b.annualPotentialCents - a.annualPotentialCents);
+
+  const overrunMonths = new Set(monthsEndingAt(month, 12));
+  const overrunGroups = new Map<string, {
+    concept: string;
+    executionCount: number;
+    overrunCount: number;
+    plannedCents: number;
+    spentCents: number;
+    overrunCents: number;
+  }>();
+  for (const forecast of movements.filter(
+    (movement) => movement.kind === "expense" && movement.status === "planned" && overrunMonths.has(movement.date.slice(0, 7)),
+  )) {
+    const usage = forecastUsage(movements, forecast);
+    if (usage.appliedCents <= 0) continue;
+    const key = normalizedConcept(forecast.concept);
+    const current = overrunGroups.get(key) ?? {
+      concept: forecast.concept.trim(),
+      executionCount: 0,
+      overrunCount: 0,
+      plannedCents: 0,
+      spentCents: 0,
+      overrunCents: 0,
+    };
+    current.executionCount += 1;
+    current.plannedCents += forecast.amountCents;
+    current.spentCents += usage.appliedCents;
+    if (usage.overrunCents > 0) {
+      current.overrunCount += 1;
+      current.overrunCents += usage.overrunCents;
+    }
+    overrunGroups.set(key, current);
+  }
+  const repeatedForecastOverruns = [...overrunGroups.entries()]
+    .filter(([, item]) => item.executionCount >= 2 && item.overrunCount >= 2 && item.overrunCount / item.executionCount >= 0.5)
+    .map(([key, item]) => ({
+      key,
+      concept: item.concept,
+      executionCount: item.executionCount,
+      overrunCount: item.overrunCount,
+      averagePlannedCents: Math.round(item.plannedCents / item.executionCount),
+      averageSpentCents: Math.round(item.spentCents / item.executionCount),
+      averageOverrunCents: Math.round(item.overrunCents / item.overrunCount),
+    }))
+    .sort((a, b) => b.averageOverrunCents - a.averageOverrunCents);
+
+  const expenseAverages: SavingsAnalysis["expenseAverages"] = ([3, 6, 12] as const).map((months) => {
+    const observed = monthsEndingAt(moveMonth(month, -1), months).filter((key) => !firstConfirmedMonth || key >= firstConfirmedMonth);
+    if (!firstConfirmedMonth || observed.length === 0) {
+      return { months, observedMonths: 0, averageCents: null, differenceCents: null, differencePercent: null };
+    }
+    const averageCents = Math.round(observed.reduce((sum, key) => sum + snapshotForMonth(movements, key).expenseCents, 0) / observed.length);
+    return {
+      months,
+      observedMonths: observed.length,
+      averageCents,
+      differenceCents: expenseCents - averageCents,
+      differencePercent: averageCents > 0 ? ((expenseCents - averageCents) / averageCents) * 100 : null,
+    };
+  });
+
+  return {
+    actualSavings: {
+      incomeCents,
+      expenseCents,
+      savedCents,
+      ratePercent: incomeCents > 0 ? (savedCents / incomeCents) * 100 : null,
+    },
+    forecastComparisons,
+    categoryTrends,
+    recurringDiscretionary,
+    repeatedForecastOverruns,
+    expenseAverages,
+  };
 }
 
 function contributionMovements(movements: Movement[], planId: string, untilDate: string) {
