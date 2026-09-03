@@ -169,7 +169,7 @@ textarea:focus-visible {
 
 .screen {
   min-height: calc(100dvh - 76px);
-  padding: 18px 16px calc(104px + env(safe-area-inset-bottom));
+  padding: 18px 16px calc(112px + max(env(safe-area-inset-bottom), 18px));
 }
 
 .view-stack {
@@ -1241,6 +1241,295 @@ textarea:focus-visible {
   accent-color: var(--saving);
 }
 
+.savings-insights {
+  display: grid;
+  gap: 18px;
+}
+
+.savings-insights > .section-heading {
+  margin-bottom: 0;
+}
+
+.savings-summary-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.real-saving-card,
+.average-comparison-card {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid #dfe5f2;
+  border-radius: 16px;
+  background: #f8f9fd;
+}
+
+.real-saving-card {
+  display: grid;
+  gap: 7px;
+}
+
+.real-saving-card > span,
+.average-comparison-card > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.real-saving-card > span svg,
+.average-comparison-card > div:first-child > svg {
+  flex: 0 0 auto;
+  color: var(--saving);
+}
+
+.real-saving-card > strong {
+  color: var(--income);
+  font-size: 30px;
+  letter-spacing: -1px;
+}
+
+.real-saving-card.negative > strong {
+  color: var(--expense);
+}
+
+.real-saving-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.average-comparison-card {
+  display: grid;
+  gap: 12px;
+}
+
+.average-comparison-card > div:first-child > span {
+  display: grid;
+  gap: 2px;
+}
+
+.average-comparison-card > div:first-child small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.average-comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.average-comparison-grid > span {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 4px;
+  padding: 9px 7px;
+  border-radius: 11px;
+  background: white;
+}
+
+.average-comparison-grid small,
+.average-comparison-grid b {
+  color: var(--muted);
+  font-size: 7px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.average-comparison-grid strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.average-comparison-grid em {
+  color: var(--ink-soft);
+  font-size: 8px;
+  font-style: normal;
+  line-height: 1.3;
+}
+
+.saving-insight-group {
+  display: grid;
+  gap: 11px;
+  padding-top: 17px;
+  border-top: 1px solid var(--line);
+}
+
+.saving-insight-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.saving-insight-heading > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.saving-insight-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.saving-insight-heading strong {
+  font-size: 12px;
+}
+
+.saving-insight-heading small,
+.saving-insight-empty {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.saving-insight-empty {
+  margin: 0;
+  padding: 11px;
+  border-radius: 11px;
+  background: #f6f7fa;
+}
+
+.saving-insight-list {
+  display: grid;
+  gap: 7px;
+}
+
+.forecast-analysis-row,
+.saving-signal-row {
+  display: grid;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e6e9ef;
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+.forecast-analysis-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.forecast-analysis-row > div,
+.forecast-analysis-row > span,
+.saving-signal-row > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.forecast-analysis-row > div strong,
+.saving-signal-row > span strong {
+  overflow: hidden;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forecast-analysis-row small,
+.saving-signal-row small {
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.35;
+}
+
+.forecast-analysis-row > span {
+  justify-items: end;
+  text-align: right;
+}
+
+.forecast-analysis-row > span strong {
+  color: var(--ink-soft);
+  font-size: 9px;
+}
+
+.forecast-analysis-row > span.positive strong { color: var(--income); }
+.forecast-analysis-row > span.negative strong { color: var(--expense); }
+
+.forecast-analysis-row > i {
+  display: block;
+  height: 5px;
+  grid-column: 1 / -1;
+  overflow: hidden;
+  border-radius: 99px;
+  background: #e9edf3;
+}
+
+.forecast-analysis-row > i > em {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--income);
+}
+
+.forecast-analysis-row > i > em.over {
+  background: var(--expense);
+}
+
+.saving-signal-row {
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.saving-signal-row > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.saving-signal-row > span em {
+  color: var(--ink-soft);
+  font-size: 8px;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.saving-signal-row > b {
+  color: var(--expense);
+  font-size: 10px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.saving-signal-row.recurring,
+.saving-signal-row.overrun {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.saving-signal-row.recurring > b {
+  color: var(--saving);
+}
+
+.saving-signal-row > b small {
+  display: block;
+  margin-top: 2px;
+  font-size: 7px;
+  font-weight: 650;
+}
+
+@media (min-width: 560px) {
+  .savings-summary-grid {
+    grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
+  }
+}
+
 .year-impact {
   display: flex;
   grid-column: 1 / -1;
@@ -2008,8 +2297,8 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr 1fr 65px 1fr 1fr;
   align-items: center;
-  height: calc(70px + env(safe-area-inset-bottom));
-  padding: 5px 10px env(safe-area-inset-bottom);
+  height: calc(78px + max(env(safe-area-inset-bottom), 18px));
+  padding: 7px 10px max(env(safe-area-inset-bottom), 18px);
   border-top: 1px solid rgba(219, 224, 233, 0.9);
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 -9px 25px rgba(26, 40, 70, 0.07);
@@ -2018,10 +2307,12 @@ button:disabled {
 
 .nav-button {
   display: grid;
+  min-height: 52px;
+  align-content: center;
   justify-items: center;
   gap: 4px;
   min-width: 0;
-  padding: 5px 0;
+  padding: 7px 0 6px;
   color: #8590a2;
 }
 
@@ -2043,7 +2334,7 @@ button:disabled {
   height: 56px;
   place-items: center;
   justify-self: center;
-  transform: translateY(-13px);
+  transform: translateY(-10px);
   border: 5px solid white;
   border-radius: 20px;
   background: var(--primary);
@@ -2632,7 +2923,7 @@ button:disabled {
   position: fixed;
   z-index: 200;
   right: 18px;
-  bottom: calc(84px + env(safe-area-inset-bottom));
+  bottom: calc(96px + max(env(safe-area-inset-bottom), 18px));
   left: 18px;
   display: flex;
   width: fit-content;
