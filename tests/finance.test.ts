@@ -6,7 +6,9 @@ import {
   forecastUsage,
   movementDisplayAmountCents,
   revertForecastCarryovers,
+  simulatePurchase,
   snapshotWithCarryover,
+  twelveMonthProjection,
 } from "../app/lib/finance.ts";
 import type { MonthlyClose, Movement } from "../app/lib/types.ts";
 
@@ -234,5 +236,114 @@ test("reabrir el mes deshace solo la cantidad que había sido acumulada", () => 
 
   assert.equal(reverted.deletes.length, 0);
   assert.equal(reverted.upserts[0].amountCents, 5_000);
+});
+
+test("la planificación de 12 meses encadena el saldo final como inicio del siguiente mes", () => {
+  const previousClose: MonthlyClose = {
+    id: "close-august",
+    month: "2026-08",
+    closedAt: "2026-08-31T20:00:00.000Z",
+    notes: "",
+    snapshot: {
+      incomeCents: 200_000,
+      expenseCents: 120_000,
+      savingCents: 20_000,
+      fundingUsedCents: 0,
+      resultCents: 50_000,
+      movementCount: 3,
+    },
+  };
+  const septemberIncome: Movement = {
+    ...forecast,
+    id: "income-september",
+    concept: "Nómina",
+    amountCents: 200_000,
+    date: "2026-09-01",
+    kind: "income",
+  };
+  const septemberExpense: Movement = {
+    ...forecast,
+    id: "expense-september",
+    amountCents: 100_000,
+    date: "2026-09-10",
+  };
+  const octoberExpense: Movement = {
+    ...forecast,
+    id: "expense-october",
+    amountCents: 30_000,
+    date: "2026-10-10",
+  };
+
+  const plan = twelveMonthProjection(
+    [septemberIncome, septemberExpense, octoberExpense],
+    [previousClose],
+    "2026-09",
+    new Date("2026-09-03T12:00:00"),
+  );
+
+  assert.equal(plan.length, 12);
+  assert.equal(plan[0].openingBalanceCents, 50_000);
+  assert.equal(plan[0].endingBalanceCents, 150_000);
+  assert.equal(plan[1].openingBalanceCents, 150_000);
+  assert.equal(plan[1].endingBalanceCents, 120_000);
+});
+
+test("la planificación identifica los gastos cubiertos con aportaciones provisionadas", () => {
+  const planId = "car-plan";
+  const contributionSeptember: Movement = {
+    ...forecast,
+    id: "contribution-september",
+    concept: "Ahorro para seguro",
+    amountCents: 6_000,
+    date: "2026-09-01",
+    kind: "saving",
+    fundingPlanId: planId,
+    fundingRole: "contribution",
+  };
+  const contributionOctober: Movement = {
+    ...contributionSeptember,
+    id: "contribution-october",
+    date: "2026-10-01",
+  };
+  const target: Movement = {
+    ...forecast,
+    id: "insurance-target",
+    concept: "Seguro",
+    amountCents: 12_000,
+    date: "2026-11-01",
+    fundingPlanId: planId,
+    fundingRole: "target",
+    fundingInstallments: 2,
+  };
+
+  const plan = twelveMonthProjection(
+    [contributionSeptember, contributionOctober, target],
+    [],
+    "2026-09",
+    new Date("2026-09-03T12:00:00"),
+  );
+
+  assert.equal(plan[0].savingCents, 6_000);
+  assert.equal(plan[1].savingCents, 6_000);
+  assert.equal(plan[2].expenseCents, 12_000);
+  assert.equal(plan[2].provisionedExpenseCents, 12_000);
+  assert.equal(plan[2].endingBalanceCents, -12_000);
+});
+
+test("el simulador descuenta una compra desde el mes elegido y calcula la aportación mensual", () => {
+  const basePlan = [
+    { key: "2026-09", name: "sept", openingBalanceCents: 0, incomeCents: 10_000, expenseCents: 0, savingCents: 0, provisionedExpenseCents: 0, endingBalanceCents: 10_000, movementCount: 1, closed: false },
+    { key: "2026-10", name: "oct", openingBalanceCents: 10_000, incomeCents: 5_000, expenseCents: 0, savingCents: 0, provisionedExpenseCents: 0, endingBalanceCents: 15_000, movementCount: 1, closed: false },
+    { key: "2026-11", name: "nov", openingBalanceCents: 15_000, incomeCents: 5_000, expenseCents: 0, savingCents: 0, provisionedExpenseCents: 0, endingBalanceCents: 20_000, movementCount: 1, closed: false },
+  ];
+
+  const simulation = simulatePurchase(basePlan, "2026-09", "2026-11", 12_000);
+
+  assert.ok(simulation);
+  assert.equal(simulation.targetMonth.endingBalanceCents, 8_000);
+  assert.equal(simulation.targetMonth.expenseCents, 12_000);
+  assert.equal(simulation.lowestMonth.key, "2026-11");
+  assert.equal(simulation.installmentCount, 2);
+  assert.equal(simulation.monthlyProvisionCents, 6_000);
 });
 
