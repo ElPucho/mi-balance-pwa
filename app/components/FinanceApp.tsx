@@ -164,6 +164,10 @@ function dateInputForMonth(month: string) {
   return `${month}-01`;
 }
 
+function fullDateLabel(date: string) {
+  return new Intl.DateTimeFormat("es-ES", { day: "numeric", month: "short", year: "numeric" }).format(new Date(`${date}T12:00:00`));
+}
+
 function CategoryIcon({ category, size = 20 }: { category?: Category; size?: number }) {
   const Icon = iconMap[category?.icon ?? "more"] ?? CircleEllipsis;
   return <Icon size={size} strokeWidth={2} />;
@@ -1468,7 +1472,14 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
         <label className="amount-field"><span>Importe</span><div><input autoFocus inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0,00" /><b>€</b></div></label>
         <label className="field"><span>Concepto</span><input value={concept} onChange={(event) => setConcept(event.target.value)} placeholder={kind === "expense" ? "Ej. Supermercado" : kind === "income" ? "Ej. Nómina" : "Ej. Fondo de emergencia"} /></label>
         <div className="field-pair movement-date-category">
-          <label className="field"><span>Fecha</span><input type="date" value={date} onChange={(event) => { setDate(event.target.value); setForecastId(""); }} disabled={lockedForecast} /></label>
+          <label className="field movement-date-field">
+            <span>Fecha</span>
+            <div className="movement-date-control">
+              <span aria-hidden="true">{fullDateLabel(date)}</span>
+              <CalendarDays aria-hidden="true" size={16} />
+              <input className="movement-native-date" type="date" aria-label="Fecha" value={date} onChange={(event) => { setDate(event.target.value); setForecastId(""); }} disabled={lockedForecast} />
+            </div>
+          </label>
           <label className="field"><span>Categoría</span><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>{availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
         </div>
         <label className="toggle-row"><span><strong>Es una previsión</strong><small>Aún no se ha producido</small></span><input type="checkbox" checked={planned} onChange={(event) => { setPlanned(event.target.checked); if (event.target.checked) setForecastId(""); }} disabled={lockedForecast} /><i /></label>
