@@ -69,6 +69,7 @@ import {
   createForecastCarryovers,
   dateForMonth,
   dayLabel,
+  findForecastCarryoverTarget,
   forecastsForMonth,
   forecastUsage,
   fundingPlans,
@@ -84,6 +85,7 @@ import {
   revertForecastCarryovers,
   snapshotWithCarryover,
 } from "../lib/finance";
+import type { ForecastCarryoverRequest } from "../lib/finance";
 import {
   cloudConfigured,
   disconnectCloud,
@@ -327,12 +329,12 @@ export default function FinanceApp() {
     notify("Preferencias guardadas");
   }
 
-  async function handleClose(close: MonthlyClose) {
+  async function handleClose(close: MonthlyClose, carryoverRequests?: ForecastCarryoverRequest[]) {
     const existing = data.closings.find((item) => item.month === close.month);
     let finalClose = close;
     const needsCarryover = !existing || existing.snapshot.carriedForecasts === undefined;
     if (needsCarryover) {
-      const carryover = createForecastCarryovers(data.movements, close.month, close.closedAt);
+      const carryover = createForecastCarryovers(data.movements, close.month, close.closedAt, carryoverRequests);
       for (const movement of carryover.upserts) {
         await saveMovement(movement);
         await queueCloudAction("saveMovement", movement);
@@ -535,6 +537,7 @@ export default function FinanceApp() {
           <CloseMonthSheet
             month={selectedMonth}
             movements={data.movements}
+            categories={data.categories}
             closings={data.closings}
             existing={data.closings.find((close) => close.month === selectedMonth)}
             onClose={() => setCloseOpen(false)}
@@ -1367,29 +1370,111 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
   );
 }
 
-function CloseMonthSheet({ month, movements, closings, existing, onClose, onSave }: {
+type CloseForecastDecision = {
+  carry: boolean;
+  targetMonth: string;
+  amountCents: number;
+};
+
+function CloseMonthSheet({ month, movements, categories, closings, existing, onClose, onSave }: {
   month: string;
   movements: Movement[];
+  categories: Category[];
   closings: MonthlyClose[];
   existing?: MonthlyClose;
   onClose: () => void;
-  onSave: (close: MonthlyClose) => void;
+  onSave: (close: MonthlyClose, carryoverRequests?: ForecastCarryoverRequest[]) => void;
 }) {
   const snapshot = existing?.snapshot ?? snapshotWithCarryover(movements, closings, month);
   const pending = forecastsForMonth(movements, month).filter((item) => item.remainingCents > 0);
   const pendingCents = pending.reduce((sum, item) => sum + item.remainingCents, 0);
   const nextMonth = moveMonth(month, 1);
   const legacyCloseWithoutCarryover = Boolean(existing && existing.snapshot.carriedForecasts === undefined);
+  const canResolveCarryovers = !existing || legacyCloseWithoutCarryover;
+  const destinationMonths = Array.from({ length: 36 }, (_, index) => moveMonth(nextMonth, index));
   const [notes, setNotes] = useState(existing?.notes ?? "");
+  const [decisions, setDecisions] = useState<Record<string, CloseForecastDecision>>(() => Object.fromEntries(
+    pending.map((item) => [item.forecast.id, { carry: true, targetMonth: nextMonth, amountCents: item.remainingCents }]),
+  ));
+  const updateDecision = (forecastId: string, patch: Partial<CloseForecastDecision>) => {
+    setDecisions((current) => ({
+      ...current,
+      [forecastId]: { ...current[forecastId], ...patch },
+    }));
+  };
+  const carryoverRequests: ForecastCarryoverRequest[] = canResolveCarryovers
+    ? pending.flatMap((item) => {
+        const decision = decisions[item.forecast.id];
+        if (!decision?.carry || decision.amountCents <= 0 || decision.targetMonth < nextMonth) return [];
+        return [{
+          sourceForecastId: item.forecast.id,
+          targetMonth: decision.targetMonth,
+          amountCents: Math.min(decision.amountCents, item.remainingCents),
+        }];
+      })
+    : [];
+  const selectedCarryoverCents = carryoverRequests.reduce((sum, request) => sum + request.amountCents, 0);
+  const invalidDecision = canResolveCarryovers && pending.some((item) => {
+    const decision = decisions[item.forecast.id];
+    return decision?.carry && (decision.amountCents <= 0 || decision.amountCents > item.remainingCents || decision.targetMonth < nextMonth);
+  });
+
   return (
     <div className="sheet-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="sheet close-sheet" role="dialog" aria-modal="true" aria-label="Cerrar mes">
         <div className="sheet-handle" />
         <div className="sheet-heading"><div><span className="eyebrow">Fotografía mensual</span><h2>{monthLabel(month)}</h2></div><button onClick={onClose} aria-label="Cerrar"><X size={22} /></button></div>
         <div className="close-summary"><div><span>Ingresos</span><strong>{formatMoney(snapshot.incomeCents)}</strong></div><div><span>Gastos</span><strong>{formatMoney(snapshot.expenseCents)}</strong></div><div><span>Ahorro</span><strong>{formatMoney(snapshot.savingCents)}</strong></div>{(snapshot.openingBalanceCents ?? 0) !== 0 && <div className="opening"><span>Saldo inicial</span><strong>{formatMoney(snapshot.openingBalanceCents ?? 0)}</strong></div>}<div className="result"><span>Disponible para {monthLabel(nextMonth, "short")}</span><strong>{formatMoney(snapshot.resultCents)}</strong></div></div>
+
+        {canResolveCarryovers && pending.length > 0 && (
+          <section className="close-assistant" aria-label="Decidir previsiones pendientes">
+            <div className="close-assistant-heading">
+              <div><span className="eyebrow">Paso 1 · Previsiones pendientes</span><h3>Decide qué quieres trasladar</h3></div>
+              <b>{formatMoney(pendingCents)}</b>
+            </div>
+            <p>Por defecto se acumulan el mes siguiente. Puedes cambiar el mes, reducir el importe o no trasladarlo.</p>
+            <div className="close-forecast-list">
+              {pending.map((item) => {
+                const decision = decisions[item.forecast.id];
+                const category = categories.find((entry) => entry.id === item.forecast.categoryId);
+                const destination = decision?.carry
+                  ? findForecastCarryoverTarget(movements, item.forecast, decision.targetMonth)
+                  : undefined;
+                const amountCents = Math.min(decision?.amountCents ?? 0, item.remainingCents);
+                return (
+                  <article className={`close-forecast-item${decision?.carry ? " selected" : " skipped"}`} key={item.forecast.id}>
+                    <div className="close-forecast-title">
+                      <div><strong>{item.forecast.concept}</strong><span>{category?.name ?? "Sin categoría"} · Pendiente {formatMoney(item.remainingCents)}</span></div>
+                      {item.appliedCents > 0 && <small>{formatMoney(item.appliedCents)} realizado</small>}
+                    </div>
+                    <div className="close-resolution-actions" role="group" aria-label={`Decisión para ${item.forecast.concept}`}>
+                      <button type="button" className={decision?.carry ? "active" : ""} aria-pressed={decision?.carry} onClick={() => updateDecision(item.forecast.id, { carry: true })}>Trasladar</button>
+                      <button type="button" className={!decision?.carry ? "active skip" : ""} aria-pressed={!decision?.carry} onClick={() => updateDecision(item.forecast.id, { carry: false })}>No trasladar</button>
+                    </div>
+                    {decision?.carry ? (
+                      <>
+                        <div className="close-destination-fields">
+                          <label><span>Mes de destino</span><select value={decision.targetMonth} onChange={(event) => updateDecision(item.forecast.id, { targetMonth: event.target.value })}>{destinationMonths.map((targetMonth) => <option value={targetMonth} key={targetMonth}>{monthLabel(targetMonth)}</option>)}</select></label>
+                          <label><span>Importe a trasladar</span><div className="close-money-input"><input type="number" min="0.01" max={item.remainingCents / 100} step="0.01" inputMode="decimal" value={decision.amountCents / 100} onChange={(event) => updateDecision(item.forecast.id, { amountCents: Math.round(Number(event.target.value) * 100) || 0 })} /><b>€</b></div></label>
+                        </div>
+                        <div className="close-destination-preview">
+                          <ArrowRight size={15} />
+                          <span>{destination ? `${formatMoney(destination.amountCents)} existentes + ${formatMoney(amountCents)} = ` : `Se creará en ${monthLabel(decision.targetMonth, "short").toLowerCase()} con `}<strong>{formatMoney((destination?.amountCents ?? 0) + amountCents)}</strong></span>
+                        </div>
+                      </>
+                    ) : <div className="close-skip-note">Esta previsión quedará cerrada sin pasar a otro mes.</div>}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
+        <div className="close-notes-heading"><span className="eyebrow">{canResolveCarryovers && pending.length > 0 ? "Paso 2" : "Notas"}</span><h3>Resumen del mes</h3></div>
         <label className="field"><span>¿Cómo ha ido el mes?</span><textarea rows={4} value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Ej. Gasté más en ocio por las vacaciones, pero mantuve el objetivo de ahorro." /></label>
-        <div className="snapshot-note"><ShieldCheck size={18} /><span>{legacyCloseWithoutCarryover ? `Este cierre se creó antes de activar la acumulación. Al actualizarlo, ${pending.length} previsión${pending.length === 1 ? "" : "es"} pendiente${pending.length === 1 ? "" : "s"} (${formatMoney(pendingCents)}) se sumará${pending.length === 1 ? "" : "n"} por concepto en ${monthLabel(nextMonth, "short").toLowerCase()}.` : existing ? "El cierre está guardado. Reabre el mes desde Inicio si necesitas modificar sus movimientos." : `${formatMoney(snapshot.resultCents)} quedarán como saldo inicial de ${monthLabel(nextMonth, "short").toLowerCase()}. ${pending.length > 0 ? `${pending.length} previsión${pending.length === 1 ? "" : "es"} pendiente${pending.length === 1 ? "" : "s"} (${formatMoney(pendingCents)}) se acumulará${pending.length === 1 ? "" : "n"} por concepto.` : "No hay previsiones pendientes que trasladar."}`}</span></div>
-        <button className="primary-button full large" onClick={() => onSave({ id: existing?.id ?? crypto.randomUUID(), month, closedAt: existing?.closedAt ?? new Date().toISOString(), notes: notes.trim(), snapshot })}><Check size={18} />{legacyCloseWithoutCarryover ? "Actualizar cierre y acumular" : existing ? "Guardar nota" : "Guardar y cerrar el mes"}</button>
+        <div className="snapshot-note"><ShieldCheck size={18} /><span>{canResolveCarryovers ? `${formatMoney(snapshot.resultCents)} quedarán como saldo inicial de ${monthLabel(nextMonth, "short").toLowerCase()}. ${carryoverRequests.length > 0 ? `Trasladarás ${formatMoney(selectedCarryoverCents)} en ${carryoverRequests.length} concepto${carryoverRequests.length === 1 ? "" : "s"}.` : "No trasladarás ninguna previsión pendiente."}` : "El cierre está guardado. Reabre el mes desde Inicio si necesitas modificar sus movimientos o sus traslados."}</span></div>
+        <button className="primary-button full large" disabled={invalidDecision} onClick={() => onSave({ id: existing?.id ?? crypto.randomUUID(), month, closedAt: existing?.closedAt ?? new Date().toISOString(), notes: notes.trim(), snapshot }, canResolveCarryovers ? carryoverRequests : undefined)}><Check size={18} />{legacyCloseWithoutCarryover ? "Actualizar cierre con estas decisiones" : existing ? "Guardar nota" : "Guardar y cerrar el mes"}</button>
+        {invalidDecision && <p className="close-validation">Revisa el mes y el importe que quieres trasladar.</p>}
       </section>
     </div>
   );
