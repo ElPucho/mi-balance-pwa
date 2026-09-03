@@ -83,7 +83,9 @@ import {
   parseAmount,
   projectionWithCarryover,
   revertForecastCarryovers,
+  simulatePurchase,
   snapshotWithCarryover,
+  twelveMonthProjection,
 } from "../lib/finance";
 import type { ForecastCarryoverRequest } from "../lib/finance";
 import {
@@ -115,7 +117,7 @@ import {
 import type { AppData, AppSettings, Category, CloudAction, CloudState, HomeWidgetId, MonthlyClose, Movement, MovementKind } from "../lib/types";
 
 type Tab = "home" | "movements" | "analysis" | "settings";
-type AnalysisPeriod = "month" | "year";
+type AnalysisPeriod = "month" | "year" | "plan";
 
 const emptyData: AppData = {
   movements: [],
@@ -967,7 +969,7 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
   return (
     <div className="view-stack">
       <div className="page-intro"><span className="eyebrow">Entender para decidir</span><h1>Análisis</h1><p>Una lectura sencilla de tu mes y de todo el año.</p></div>
-      <div className="segmented"><button className={period === "month" ? "active" : ""} onClick={() => setPeriod("month")}>Mes</button><button className={period === "year" ? "active" : ""} onClick={() => setPeriod("year")}>Año</button></div>
+      <div className="segmented analysis-period"><button className={period === "month" ? "active" : ""} onClick={() => setPeriod("month")}>Mes</button><button className={period === "year" ? "active" : ""} onClick={() => setPeriod("year")}>Año</button><button className={period === "plan" ? "active" : ""} onClick={() => setPeriod("plan")}>12 meses</button></div>
       {period === "month" ? (
         <>
           <MonthSwitcher month={month} onChange={onMonthChange} />
@@ -1002,7 +1004,7 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
             <div className="year-impact"><span>En 12 meses podrías sumar</span><strong>{formatMoney(opportunity * 12)}</strong></div>
           </section>
         </>
-      ) : (
+      ) : period === "year" ? (
         <>
           <div className="year-heading"><button onClick={() => onMonthChange(`${year - 1}-${month.slice(5)}`)}><ArrowLeft size={18} /></button><strong>{year}</strong><button onClick={() => onMonthChange(`${year + 1}-${month.slice(5)}`)}><ArrowRight size={18} /></button></div>
           <div className="metric-grid triple">
@@ -1030,7 +1032,91 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
             <div className="chart-key"><span><i className="actual" />Realizado</span><span><i className="forecast" />Previsto</span></div>
           </section>
         </>
+      ) : (
+        <TwelveMonthPlanningView data={data} startMonth={month} onStartMonthChange={onMonthChange} mounted={mounted} />
       )}
+    </div>
+  );
+}
+
+function TwelveMonthPlanningView({ data, startMonth, onStartMonthChange, mounted }: {
+  data: AppData;
+  startMonth: string;
+  onStartMonthChange: (month: string) => void;
+  mounted: boolean;
+}) {
+  const [purchaseAmount, setPurchaseAmount] = useState("");
+  const [purchaseMonth, setPurchaseMonth] = useState(() => moveMonth(startMonth, 2));
+  const projection = twelveMonthProjection(data.movements, data.closings, startMonth);
+  const selectedPurchaseMonth = projection.some((item) => item.key === purchaseMonth) ? purchaseMonth : projection[2].key;
+  const purchaseCents = parseAmount(purchaseAmount);
+  const simulation = simulatePurchase(projection, startMonth, selectedPurchaseMonth, purchaseCents);
+  const lowestMonth = projection.reduce((lowest, item) => item.endingBalanceCents < lowest.endingBalanceCents ? item : lowest);
+  const finalMonth = projection[projection.length - 1];
+  const provisionedTotalCents = projection.reduce((sum, item) => sum + item.provisionedExpenseCents, 0);
+  const chartData = projection.map((item, index) => ({
+    name: item.name,
+    saldo: item.endingBalanceCents / 100,
+    conCompra: simulation?.months[index].endingBalanceCents !== undefined ? simulation.months[index].endingBalanceCents / 100 : undefined,
+  }));
+
+  return (
+    <div className="planning-stack">
+      <div className="planning-start">
+        <span>La planificación empieza en</span>
+        <MonthSwitcher month={startMonth} onChange={onStartMonthChange} />
+      </div>
+
+      <div className="metric-grid triple">
+        <MetricCard label="Saldo al terminar" value={formatMoney(finalMonth.endingBalanceCents)} foot={monthLabel(finalMonth.key)} tone={finalMonth.endingBalanceCents >= 0 ? "good" : "warn"} />
+        <MetricCard label="Saldo más bajo" value={formatMoney(lowestMonth.endingBalanceCents)} foot={monthLabel(lowestMonth.key)} tone={lowestMonth.endingBalanceCents >= 0 ? "neutral" : "warn"} />
+        <MetricCard label="Ya provisionado" value={formatMoney(provisionedTotalCents)} foot="Gastos cubiertos" tone="good" />
+      </div>
+
+      <section className="section-card chart-card planning-chart">
+        <div className="section-heading"><div><span className="eyebrow">Visión de tesorería</span><h2>Saldo estimado mes a mes</h2></div><span className={`chart-result ${lowestMonth.endingBalanceCents >= 0 ? "positive" : "negative"}`}>Mínimo {lowestMonth.name}</span></div>
+        {mounted && <ResponsiveContainer width="100%" height={245}><LineChart data={chartData} margin={{ top: 12, right: 9, left: -22, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Line type="monotone" dataKey="saldo" name="Saldo estimado" stroke="#5977cf" strokeWidth={2.8} dot={{ r: 3, fill: "#5977cf" }} />{simulation && <Line type="monotone" dataKey="conCompra" name="Con la compra" stroke="#ef6c67" strokeWidth={2.5} strokeDasharray="5 4" dot={false} />}</LineChart></ResponsiveContainer>}
+        <div className="chart-key"><span><i className="forecast" />Saldo estimado</span>{simulation && <span><i className="expense" />Con la compra</span>}</div>
+      </section>
+
+      <section className="section-card purchase-simulator">
+        <div className="simulator-heading"><span className="saving-lab-icon"><ShoppingBag size={22} /></span><div><span className="eyebrow">Simulador</span><h2>¿Qué ocurre si compro esto?</h2><p>Prueba un importe y un mes. No se guardará ningún movimiento.</p></div></div>
+        <div className="simulator-fields">
+          <label className="field"><span>Precio de la compra</span><div className="inline-money-input"><input inputMode="decimal" value={purchaseAmount} onChange={(event) => setPurchaseAmount(event.target.value)} placeholder="0,00" /><b>€</b></div></label>
+          <label className="field"><span>Mes de compra</span><select value={selectedPurchaseMonth} onChange={(event) => setPurchaseMonth(event.target.value)}>{projection.map((item) => <option key={item.key} value={item.key}>{monthLabel(item.key)}</option>)}</select></label>
+        </div>
+        {simulation ? (
+          <div className="simulation-results" aria-live="polite">
+            <div className="simulation-balance"><span>Saldo al terminar {simulation.targetMonth.name}</span><strong>{formatMoney(projection.find((item) => item.key === selectedPurchaseMonth)!.endingBalanceCents)} <ArrowRight size={17} /> <b>{formatMoney(simulation.targetMonth.endingBalanceCents)}</b></strong></div>
+            <div className="simulation-result-grid">
+              <span><small>Punto más bajo</small><strong>{formatMoney(simulation.lowestMonth.endingBalanceCents)}</strong><em>{monthLabel(simulation.lowestMonth.key)}</em></span>
+              <span><small>Para llegar preparado</small><strong>{formatMoney(simulation.monthlyProvisionCents)} al mes</strong><em>{simulation.installmentCount > 0 ? `Durante ${simulation.installmentCount} mes${simulation.installmentCount === 1 ? "" : "es"}, hasta el mes anterior` : "Necesitarías tenerlo ya disponible"}</em></span>
+            </div>
+          </div>
+        ) : <div className="simulation-empty"><Target size={21} /><span>Introduce un precio para ver su efecto y cuánto tendrías que apartar cada mes.</span></div>}
+      </section>
+
+      <section className="section-card timeline-card">
+        <div className="section-heading"><div><span className="eyebrow">Próximos 12 meses</span><h2>Línea temporal</h2></div></div>
+        <p className="timeline-explanation">El saldo final de cada mes pasa al siguiente. Los gastos provisionados son la parte del gasto ya cubierta con dinero apartado anteriormente.</p>
+        <div className="plan-timeline">
+          {projection.map((item) => (
+            <article key={item.key} className={`plan-month ${item.key === lowestMonth.key ? "lowest" : ""}`}>
+              <div className="timeline-rail"><i />{item.key !== finalMonth.key && <span />}</div>
+              <div className="plan-month-content">
+                <header><div><strong>{monthLabel(item.key)}</strong>{item.closed && <em>Cerrado</em>}{item.key === lowestMonth.key && <em className="low-badge"><TrendingDown size={12} /> Saldo más bajo</em>}</div><span><small>Saldo final</small><strong className={item.endingBalanceCents < 0 ? "negative" : ""}>{formatMoney(item.endingBalanceCents)}</strong></span></header>
+                <div className="opening-balance"><span>Saldo inicial</span><strong>{formatMoney(item.openingBalanceCents)}</strong></div>
+                <div className="plan-flow-grid">
+                  <span className="income"><small>Ingresos previstos</small><strong>+{formatMoney(item.incomeCents)}</strong></span>
+                  <span className="expense"><small>Gastos previstos</small><strong>−{formatMoney(item.expenseCents)}</strong></span>
+                  <span className="saving"><small>Ahorro apartado</small><strong>−{formatMoney(item.savingCents)}</strong></span>
+                  <span className="provision"><small>Gastos provisionados</small><strong>+{formatMoney(item.provisionedExpenseCents)}</strong></span>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
@@ -1223,7 +1309,7 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
       return;
     }
     const planId = crypto.randomUUID();
-    const now = Date.now();
+    const now = new Date().getTime();
     const baseAmount = Math.floor(amountCents / installments);
     const remainder = amountCents - baseAmount * installments;
     const target: Movement = {
