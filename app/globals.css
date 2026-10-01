@@ -1112,10 +1112,9 @@ textarea:focus-visible {
 }
 
 .metric-card strong {
-  overflow: hidden;
+  overflow-wrap: anywhere;
   font-size: 22px;
   letter-spacing: -0.8px;
-  text-overflow: ellipsis;
 }
 
 .metric-card small {
@@ -1157,6 +1156,7 @@ textarea:focus-visible {
   top: 50%;
   left: 50%;
   display: grid;
+  width: 106px;
   transform: translate(-50%, -50%);
   text-align: center;
 }
@@ -1168,7 +1168,8 @@ textarea:focus-visible {
 
 .donut-center strong {
   margin-top: 2px;
-  font-size: 15px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
 }
 
 .legend-list {
@@ -3150,4 +3151,3 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
-

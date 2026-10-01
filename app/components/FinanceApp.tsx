@@ -73,8 +73,8 @@ import {
   forecastsForMonth,
   forecastUsage,
   fundingPlans,
+  formatAmount,
   formatMoney,
-  formatShortMoney,
   monthKey,
   monthLabel,
   moveMonth,
@@ -833,14 +833,14 @@ function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, 
       {show("categoryChart") && <section className="section-card chart-card home-chart-card">
         <div className="section-heading"><div><span className="eyebrow">Gráfico del mes</span><h2>Gastos por categoría</h2></div><button className="text-button" onClick={onOpenAnalysis}>Ver análisis <ChevronRight size={16} /></button></div>
         {monthCategories.length === 0 ? <ChartEmpty /> : <div className="donut-wrap">
-          <div className="donut-chart">{mounted && <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={monthCategories} dataKey="value" innerRadius={54} outerRadius={76} paddingAngle={2} stroke="none">{monthCategories.map((item) => <Cell key={item.id} fill={item.color} />)}</Pie><Tooltip formatter={(value) => formatMoney(Number(value))} /></PieChart></ResponsiveContainer>}<div className="donut-center"><span>Total</span><strong>{formatShortMoney(current.expenseCents)}</strong></div></div>
+          <div className="donut-chart">{mounted && <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={monthCategories} dataKey="value" innerRadius={54} outerRadius={76} paddingAngle={2} stroke="none">{monthCategories.map((item) => <Cell key={item.id} fill={item.color} />)}</Pie><Tooltip formatter={(value) => formatMoney(Number(value))} /></PieChart></ResponsiveContainer>}<div className="donut-center"><span>Total</span><strong>{formatMoney(current.expenseCents)}</strong></div></div>
           <div className="legend-list">{monthCategories.slice(0, 5).map((item) => <div key={item.id}><i style={{ background: item.color }} /><span>{item.name}</span><strong>{current.expenseCents > 0 ? Math.round((item.value / current.expenseCents) * 100) : 0}%</strong></div>)}</div>
         </div>}
       </section>}
 
       {show("annualChart") && <section className="section-card chart-card home-chart-card">
         <div className="section-heading"><div><span className="eyebrow">Gráfico anual</span><h2>Evolución acumulada</h2></div><button className="text-button" onClick={onOpenAnalysis}>Ver análisis <ChevronRight size={16} /></button></div>
-        {cumulative.every((item) => item.ingresosAcumulados === 0 && item.gastosAcumulados === 0) ? <ChartEmpty /> : mounted && <ResponsiveContainer width="100%" height={220}><LineChart data={cumulative} margin={{ top: 8, right: 7, left: -25, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#778197", fontSize: 9 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Line type="monotone" dataKey="ingresosAcumulados" name="Ingresos" stroke="#129775" strokeWidth={2.3} dot={false} /><Line type="monotone" dataKey="gastosAcumulados" name="Gastos" stroke="#ef6c67" strokeWidth={2.3} dot={false} /><Line type="monotone" dataKey="disponibleAcumulado" name="Disponible" stroke="#5977cf" strokeWidth={2.6} dot={false} /></LineChart></ResponsiveContainer>}
+        {cumulative.every((item) => item.ingresosAcumulados === 0 && item.gastosAcumulados === 0) ? <ChartEmpty /> : mounted && <ResponsiveContainer width="100%" height={220}><LineChart data={cumulative} margin={{ top: 8, right: 7, left: 0, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis width={82} tickFormatter={(value) => formatAmount(Number(value) * 100)} tick={{ fill: "#778197", fontSize: 9 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Line type="monotone" dataKey="ingresosAcumulados" name="Ingresos" stroke="#129775" strokeWidth={2.3} dot={false} /><Line type="monotone" dataKey="gastosAcumulados" name="Gastos" stroke="#ef6c67" strokeWidth={2.3} dot={false} /><Line type="monotone" dataKey="disponibleAcumulado" name="Disponible" stroke="#5977cf" strokeWidth={2.6} dot={false} /></LineChart></ResponsiveContainer>}
         <div className="chart-key"><span><i className="income" />Ingresos</span><span><i className="expense" />Gastos</span><span><i className="saving" />Disponible</span></div>
       </section>}
 
@@ -1055,7 +1055,7 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
           <SavingsInsights analysis={savingInsights} month={month} />
           <section className="section-card chart-card">
             <div className="section-heading"><div><span className="eyebrow">Real + pendiente</span><h2>Cómo puede terminar el mes</h2></div></div>
-            {mounted && <ResponsiveContainer width="100%" height={220}><BarChart data={forecastComparison} margin={{ top: 8, right: 4, left: -24, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Bar dataKey="real" name="Realizado" fill="#a8b1c1" radius={[5, 5, 0, 0]} /><Bar dataKey="cierre" name="Cierre estimado" fill="#5b6ee1" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer>}
+            {mounted && <ResponsiveContainer width="100%" height={220}><BarChart data={forecastComparison} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis width={82} tickFormatter={(value) => formatAmount(Number(value) * 100)} tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Bar dataKey="real" name="Realizado" fill="#a8b1c1" radius={[5, 5, 0, 0]} /><Bar dataKey="cierre" name="Cierre estimado" fill="#5b6ee1" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer>}
             <div className="chart-key"><span><i className="actual" />Realizado</span><span><i className="forecast" />Cierre estimado</span></div>
           </section>
           <section className="section-card chart-card">
@@ -1065,7 +1065,7 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
                 <div className="donut-wrap">
                   <div className="donut-chart">
                     {mounted && <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={categories} dataKey="value" innerRadius={54} outerRadius={76} paddingAngle={2} stroke="none">{categories.map((item) => <Cell key={item.id} fill={item.color} />)}</Pie><Tooltip formatter={(value) => formatMoney(Number(value))} /></PieChart></ResponsiveContainer>}
-                    <div className="donut-center"><span>Total</span><strong>{formatShortMoney(snapshot.expenseCents)}</strong></div>
+                    <div className="donut-center"><span>Total</span><strong>{formatMoney(snapshot.expenseCents)}</strong></div>
                   </div>
                   <div className="legend-list">{categories.slice(0, 5).map((item) => <div key={item.id}><i style={{ background: item.color }} /><span>{item.name}</span><strong>{snapshot.expenseCents > 0 ? Math.round((item.value / snapshot.expenseCents) * 100) : 0}%</strong></div>)}</div>
                 </div>
@@ -1090,20 +1090,20 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
           <section className="section-card chart-card annual-chart">
             <div className="section-heading"><div><span className="eyebrow">Real + previsto</span><h2>Evolución acumulada del año</h2></div><span className={`chart-result ${finalCumulative.disponibleAcumulado >= 0 ? "positive" : "negative"}`}>Final {formatMoney(finalCumulative.disponibleAcumulado * 100)}</span></div>
             {cumulativeSeries.every((item) => item.ingresosAcumulados === 0 && item.gastosAcumulados === 0) ? <ChartEmpty /> : mounted && (
-              <ResponsiveContainer width="100%" height={255}><LineChart data={cumulativeSeries} margin={{ top: 10, right: 8, left: -22, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Line type="monotone" dataKey="ingresosAcumulados" name="Ingresos acumulados" stroke="#129775" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="gastosAcumulados" name="Gastos acumulados" stroke="#ef6c67" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="disponibleAcumulado" name="Disponible acumulado" stroke="#5977cf" strokeWidth={2.8} dot={false} /></LineChart></ResponsiveContainer>
+              <ResponsiveContainer width="100%" height={255}><LineChart data={cumulativeSeries} margin={{ top: 10, right: 8, left: 0, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis width={82} tickFormatter={(value) => formatAmount(Number(value) * 100)} tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Line type="monotone" dataKey="ingresosAcumulados" name="Ingresos acumulados" stroke="#129775" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="gastosAcumulados" name="Gastos acumulados" stroke="#ef6c67" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="disponibleAcumulado" name="Disponible acumulado" stroke="#5977cf" strokeWidth={2.8} dot={false} /></LineChart></ResponsiveContainer>
             )}
             <div className="chart-key"><span><i className="income" />Ingresos</span><span><i className="expense" />Gastos</span><span><i className="saving" />Disponible</span></div>
           </section>
           <section className="section-card chart-card annual-chart">
             <div className="section-heading"><div><span className="eyebrow">Plan anual</span><h2>Cierre estimado por mes</h2></div></div>
             {projectionSeries.every((item) => item.ingresosPrevistos === 0 && item.gastosPrevistos === 0 && item.ahorroPrevisto === 0) ? <ChartEmpty /> : mounted && (
-              <ResponsiveContainer width="100%" height={245}><LineChart data={projectionSeries} margin={{ top: 10, right: 8, left: -22, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Line type="monotone" dataKey="ingresosPrevistos" name="Ingresos" stroke="#129775" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="gastosPrevistos" name="Gastos" stroke="#ef6c67" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="ahorroPrevisto" name="Ahorro" stroke="#5977cf" strokeWidth={2.5} dot={false} /></LineChart></ResponsiveContainer>
+              <ResponsiveContainer width="100%" height={245}><LineChart data={projectionSeries} margin={{ top: 10, right: 8, left: 0, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis width={82} tickFormatter={(value) => formatAmount(Number(value) * 100)} tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Line type="monotone" dataKey="ingresosPrevistos" name="Ingresos" stroke="#129775" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="gastosPrevistos" name="Gastos" stroke="#ef6c67" strokeWidth={2.5} dot={false} /><Line type="monotone" dataKey="ahorroPrevisto" name="Ahorro" stroke="#5977cf" strokeWidth={2.5} dot={false} /></LineChart></ResponsiveContainer>
             )}
             <div className="chart-key"><span><i className="income" />Ingresos</span><span><i className="expense" />Gastos</span><span><i className="saving" />Ahorro</span></div>
           </section>
           <section className="section-card chart-card">
             <div className="section-heading"><div><span className="eyebrow">Real frente a plan</span><h2>Resultado mensual</h2></div></div>
-            {mounted && <ResponsiveContainer width="100%" height={220}><BarChart data={projectionSeries} margin={{ top: 8, right: 4, left: -24, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Bar dataKey="resultado" name="Real" fill="#a8b1c1" radius={[5, 5, 0, 0]} /><Bar dataKey="resultadoPrevisto" name="Previsto" fill="#5b6ee1" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer>}
+            {mounted && <ResponsiveContainer width="100%" height={220}><BarChart data={projectionSeries} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis width={82} tickFormatter={(value) => formatAmount(Number(value) * 100)} tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Bar dataKey="resultado" name="Real" fill="#a8b1c1" radius={[5, 5, 0, 0]} /><Bar dataKey="resultadoPrevisto" name="Previsto" fill="#5b6ee1" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer>}
             <div className="chart-key"><span><i className="actual" />Realizado</span><span><i className="forecast" />Previsto</span></div>
           </section>
         </>
@@ -1250,14 +1250,14 @@ function TwelveMonthPlanningView({ data, startMonth, onStartMonthChange, mounted
 
       <section className="section-card chart-card planning-chart">
         <div className="section-heading"><div><span className="eyebrow">Visión de tesorería</span><h2>Saldo estimado mes a mes</h2></div><span className={`chart-result ${lowestMonth.endingBalanceCents >= 0 ? "positive" : "negative"}`}>Mínimo {lowestMonth.name}</span></div>
-        {mounted && <ResponsiveContainer width="100%" height={245}><LineChart data={chartData} margin={{ top: 12, right: 9, left: -22, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Line type="monotone" dataKey="saldo" name="Saldo estimado" stroke="#5977cf" strokeWidth={2.8} dot={{ r: 3, fill: "#5977cf" }} />{simulation && <Line type="monotone" dataKey="conCompra" name="Con la compra" stroke="#ef6c67" strokeWidth={2.5} strokeDasharray="5 4" dot={false} />}</LineChart></ResponsiveContainer>}
+        {mounted && <ResponsiveContainer width="100%" height={245}><LineChart data={chartData} margin={{ top: 12, right: 9, left: 0, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><YAxis width={82} tickFormatter={(value) => formatAmount(Number(value) * 100)} tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Line type="monotone" dataKey="saldo" name="Saldo estimado" stroke="#5977cf" strokeWidth={2.8} dot={{ r: 3, fill: "#5977cf" }} />{simulation && <Line type="monotone" dataKey="conCompra" name="Con la compra" stroke="#ef6c67" strokeWidth={2.5} strokeDasharray="5 4" dot={false} />}</LineChart></ResponsiveContainer>}
         <div className="chart-key"><span><i className="forecast" />Saldo estimado</span>{simulation && <span><i className="expense" />Con la compra</span>}</div>
       </section>
 
       <section className="section-card purchase-simulator">
         <div className="simulator-heading"><span className="saving-lab-icon"><ShoppingBag size={22} /></span><div><span className="eyebrow">Simulador</span><h2>¿Qué ocurre si compro esto?</h2><p>Prueba un importe y un mes. No se guardará ningún movimiento.</p></div></div>
         <div className="simulator-fields">
-          <label className="field"><span>Precio de la compra</span><div className="inline-money-input"><input inputMode="decimal" value={purchaseAmount} onChange={(event) => setPurchaseAmount(event.target.value)} placeholder="0,00" /><b>€</b></div></label>
+          <label className="field"><span>Precio de la compra</span><div className="inline-money-input"><AmountInput value={purchaseAmount} onValueChange={setPurchaseAmount} /><b>€</b></div></label>
           <label className="field"><span>Mes de compra</span><select value={selectedPurchaseMonth} onChange={(event) => setPurchaseMonth(event.target.value)}>{projection.map((item) => <option key={item.key} value={item.key}>{monthLabel(item.key)}</option>)}</select></label>
         </div>
         {simulation ? (
@@ -1300,6 +1300,24 @@ function MetricCard({ label, value, foot, tone }: { label: string; value: string
   return <div className={`metric-card ${tone}`}><span>{label}</span><strong>{value}</strong><small>{foot}</small></div>;
 }
 
+function AmountInput({ value, onValueChange, autoFocus = false }: {
+  value: string;
+  onValueChange: (value: string) => void;
+  autoFocus?: boolean;
+}) {
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      autoFocus={autoFocus}
+      value={value}
+      onChange={(event) => onValueChange(event.target.value)}
+      onBlur={() => { if (value.trim()) onValueChange(formatAmount(parseAmount(value))); }}
+      placeholder="0,00"
+    />
+  );
+}
+
 function ChartEmpty() {
   return <div className="chart-empty"><BarChart3 size={27} /><strong>Aún no hay datos suficientes</strong><span>Los gráficos aparecerán cuando registres movimientos.</span></div>;
 }
@@ -1315,8 +1333,8 @@ function SettingsView({ data, cloud, onSave, onClear, onCloudConnect, onCloudVer
   onCloudDisconnect: () => void;
 }) {
   const [name, setName] = useState(data.settings.displayName);
-  const [budget, setBudget] = useState(String(data.settings.monthlyBudgetCents / 100).replace(".", ","));
-  const [goal, setGoal] = useState(String(data.settings.monthlySavingGoalCents / 100).replace(".", ","));
+  const [budget, setBudget] = useState(formatAmount(data.settings.monthlyBudgetCents));
+  const [goal, setGoal] = useState(formatAmount(data.settings.monthlySavingGoalCents));
   const [email, setEmail] = useState(cloud.email ?? "");
   const [code, setCode] = useState("");
   const [resendSeconds, setResendSeconds] = useState(0);
@@ -1344,8 +1362,8 @@ function SettingsView({ data, cloud, onSave, onClear, onCloudConnect, onCloudVer
         <div className="section-heading"><div><span className="eyebrow">Preferencias</span><h2>Objetivos mensuales</h2></div></div>
         <label className="field"><span>Tu nombre</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Nombre" /></label>
         <div className="field-pair">
-          <label className="field"><span>Presupuesto de gasto</span><div className="money-input"><input inputMode="decimal" value={budget} onChange={(event) => setBudget(event.target.value)} /><b>€</b></div></label>
-          <label className="field"><span>Objetivo de ahorro</span><div className="money-input"><input inputMode="decimal" value={goal} onChange={(event) => setGoal(event.target.value)} /><b>€</b></div></label>
+          <label className="field"><span>Presupuesto de gasto</span><div className="money-input"><AmountInput value={budget} onValueChange={setBudget} /><b>€</b></div></label>
+          <label className="field"><span>Objetivo de ahorro</span><div className="money-input"><AmountInput value={goal} onValueChange={setGoal} /><b>€</b></div></label>
         </div>
         <button className="primary-button full" onClick={() => onSave({ ...data.settings, displayName: name.trim() || "Usuario", monthlyBudgetCents: parseAmount(budget), monthlySavingGoalCents: parseAmount(goal), currency: "EUR", updatedAt: new Date().toISOString() })}>Guardar preferencias</button>
       </section>
@@ -1409,7 +1427,7 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
     (item) => item.status === "planned" && item.kind === initialKind && item.categoryId === initialCategoryId && item.date.startsWith(initialDate.slice(0, 7)),
   );
   const [kind, setKind] = useState<MovementKind>(initialKind);
-  const [amount, setAmount] = useState(movement ? String(movement.amountCents / 100).replace(".", ",") : "");
+  const [amount, setAmount] = useState(movement ? formatAmount(movement.amountCents) : "");
   const [concept, setConcept] = useState(movement?.concept ?? "");
   const [date, setDate] = useState(initialDate);
   const [categoryId, setCategoryId] = useState(initialCategoryId);
@@ -1572,7 +1590,7 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
         <div className="kind-selector">
           {([['expense','Gasto'],['income','Ingreso'],['saving','Ahorro']] as const).map(([value, label]) => <button key={value} className={kind === value ? "active" : ""} onClick={() => selectKind(value)} disabled={lockedForecast}>{label}</button>)}
         </div>
-        <label className="amount-field"><span>Importe</span><div><input autoFocus inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="0,00" /><b>€</b></div></label>
+        <label className="amount-field"><span>Importe</span><div><AmountInput autoFocus value={amount} onValueChange={setAmount} /><b>€</b></div></label>
         <label className="field"><span>Concepto</span><input value={concept} onChange={(event) => setConcept(event.target.value)} placeholder={kind === "expense" ? "Ej. Supermercado" : kind === "income" ? "Ej. Nómina" : "Ej. Fondo de emergencia"} /></label>
         <div className="field-pair movement-date-category">
           <label className="field movement-date-field">
@@ -1642,6 +1660,7 @@ type CloseForecastDecision = {
   carry: boolean;
   targetMonth: string;
   amountCents: number;
+  amountInput: string;
 };
 
 function CloseMonthSheet({ month, movements, categories, closings, existing, onClose, onSave }: {
@@ -1662,7 +1681,7 @@ function CloseMonthSheet({ month, movements, categories, closings, existing, onC
   const destinationMonths = Array.from({ length: 36 }, (_, index) => moveMonth(nextMonth, index));
   const [notes, setNotes] = useState(existing?.notes ?? "");
   const [decisions, setDecisions] = useState<Record<string, CloseForecastDecision>>(() => Object.fromEntries(
-    pending.map((item) => [item.forecast.id, { carry: true, targetMonth: nextMonth, amountCents: item.remainingCents }]),
+    pending.map((item) => [item.forecast.id, { carry: true, targetMonth: nextMonth, amountCents: item.remainingCents, amountInput: formatAmount(item.remainingCents) }]),
   ));
   const updateDecision = (forecastId: string, patch: Partial<CloseForecastDecision>) => {
     setDecisions((current) => ({
@@ -1723,7 +1742,7 @@ function CloseMonthSheet({ month, movements, categories, closings, existing, onC
                       <>
                         <div className="close-destination-fields">
                           <label><span>Mes de destino</span><select value={decision.targetMonth} onChange={(event) => updateDecision(item.forecast.id, { targetMonth: event.target.value })}>{destinationMonths.map((targetMonth) => <option value={targetMonth} key={targetMonth}>{monthLabel(targetMonth)}</option>)}</select></label>
-                          <label><span>Importe a trasladar</span><div className="close-money-input"><input type="number" min="0.01" max={item.remainingCents / 100} step="0.01" inputMode="decimal" value={decision.amountCents / 100} onChange={(event) => updateDecision(item.forecast.id, { amountCents: Math.round(Number(event.target.value) * 100) || 0 })} /><b>€</b></div></label>
+                          <label><span>Importe a trasladar</span><div className="close-money-input"><AmountInput value={decision.amountInput} onValueChange={(value) => updateDecision(item.forecast.id, { amountInput: value, amountCents: parseAmount(value) })} /><b>€</b></div></label>
                         </div>
                         <div className="close-destination-preview">
                           <ArrowRight size={15} />
@@ -1751,4 +1770,3 @@ function CloseMonthSheet({ month, movements, categories, closings, existing, onC
 function LoadingState() {
   return <div className="loading-state"><div className="loading-logo"><AppLogo /></div><strong>Preparando tu balance…</strong></div>;
 }
-

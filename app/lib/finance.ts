@@ -100,23 +100,23 @@ export type SavingsAnalysis = {
 export const money = new Intl.NumberFormat("es-ES", {
   style: "currency",
   currency: "EUR",
-  minimumFractionDigits: 0,
+  useGrouping: "always",
+  minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
-export const shortMoney = new Intl.NumberFormat("es-ES", {
-  style: "currency",
-  currency: "EUR",
-  notation: "compact",
-  maximumFractionDigits: 1,
+const amountFormat = new Intl.NumberFormat("es-ES", {
+  useGrouping: "always",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
 });
 
 export function formatMoney(cents: number) {
   return money.format(cents / 100);
 }
 
-export function formatShortMoney(cents: number) {
-  return shortMoney.format(cents / 100);
+export function formatAmount(cents: number) {
+  return amountFormat.format(cents / 100);
 }
 
 export function monthKey(date: Date) {
@@ -792,8 +792,29 @@ export function simulatePurchase(
 }
 
 export function parseAmount(value: string) {
-  const normalized = value.trim().replace(/\s/g, "").replace(/\./g, "").replace(",", ".");
-  const amount = Number(normalized);
-  return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
-}
+  const input = value.trim().replace(/\s/g, "").replace(/\s*€$/, "");
+  const comma = input.lastIndexOf(",");
+  const dot = input.lastIndexOf(".");
+  let normalized = input;
 
+  if (comma >= 0 && dot >= 0) {
+    // The last separator is decimal; the other must form valid thousands groups.
+    const decimalIndex = Math.max(comma, dot);
+    const integer = input.slice(0, decimalIndex);
+    const group = comma > dot ? "\\." : ",";
+    if (!new RegExp(`^[+-]?\\d{1,3}(?:${group}\\d{3})+$`).test(integer)) return 0;
+    normalized = integer.replace(/[.,]/g, "") + "." + input.slice(decimalIndex + 1);
+  } else if ((input.match(/\./g)?.length ?? 0) > 1) {
+    if (!/^[+-]?\d{1,3}(?:\.\d{3})+$/.test(input)) return 0;
+    normalized = input.replace(/\./g, "");
+  } else {
+    // A single point has the same meaning as a decimal comma when typing.
+    normalized = input.replace(",", ".");
+  }
+
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?$/.exec(normalized);
+  if (!match || !(match[2] || match[3])) return 0;
+  const fraction = match[3] ?? "";
+  const cents = Number(match[2] || "0") * 100 + Number(fraction.padEnd(2, "0").slice(0, 2)) + (Number(fraction[2] ?? "0") >= 5 ? 1 : 0);
+  return Number.isSafeInteger(cents) ? (match[1] === "-" ? -cents : cents) : 0;
+}

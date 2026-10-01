@@ -3,8 +3,11 @@ import test from "node:test";
 
 import {
   createForecastCarryovers,
+  formatAmount,
+  formatMoney,
   forecastUsage,
   movementDisplayAmountCents,
+  parseAmount,
   revertForecastCarryovers,
   savingsAnalysis,
   simulatePurchase,
@@ -12,6 +15,53 @@ import {
   twelveMonthProjection,
 } from "../app/lib/finance.ts";
 import type { Category, MonthlyClose, Movement } from "../app/lib/types.ts";
+
+test("todos los importes muestran dos decimales y punto de miles, incluso con cuatro cifras", () => {
+  for (const [cents, expected] of [
+    [0, "0,00"],
+    [1, "0,01"],
+    [1250, "12,50"],
+    [100_000, "1.000,00"],
+    [123_456, "1.234,56"],
+    [123_456_789, "1.234.567,89"],
+    [-123_456, "-1.234,56"],
+  ] as const) {
+    assert.equal(formatAmount(cents), expected);
+    assert.equal(formatMoney(cents).replace(/\s/g, " "), `${expected} €`);
+    assert.equal(parseAmount(formatAmount(cents)), cents);
+    assert.equal(parseAmount(formatMoney(cents)), cents);
+  }
+});
+
+test("el punto y la coma sirven como separador decimal sin multiplicar el importe por cien", () => {
+  for (const [input, expected] of [
+    ["12.50", 1250],
+    ["12,50", 1250],
+    ["1234.56", 123_456],
+    ["1234,56", 123_456],
+    [".5", 50],
+    [",5", 50],
+    ["12.", 1200],
+    ["12,", 1200],
+    ["1.005", 101],
+    ["1,005", 101],
+    ["-12.50", -1250],
+    ["1.234,56", 123_456],
+    ["1.234.567,89", 123_456_789],
+    ["1,234.56", 123_456],
+    [" 1 234,56 € ", 123_456],
+    ["1.234.567", 123_456_700],
+    ["", 0],
+    [".", 0],
+    ["texto", 0],
+    ["1e3", 0],
+    ["1,2,3", 0],
+    ["12.34.56", 0],
+    ["12.50,00", 0],
+  ] as const) {
+    assert.equal(parseAmount(input), expected, input);
+  }
+});
 
 const forecast: Movement = {
   id: "forecast-1",
@@ -401,4 +451,3 @@ test("el análisis de ahorro explica previsiones, tendencias, recurrencias y med
   assert.equal(analysis.expenseAverages[0].differenceCents, 2_500);
   assert.equal(analysis.expenseAverages[0].differencePercent, 20);
 });
-
