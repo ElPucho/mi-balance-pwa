@@ -1,5 +1,7 @@
 import { openDB, type DBSchema } from "idb";
 import type { AppData, AppSettings, Category, CloudAction, HomeWidgetId, MonthlyClose, Movement, OutboxItem } from "./types";
+import { dataChanges, type UndoRecord } from "./backups";
+import { generateRecurring } from "./planning";
 
 interface FinanceDB extends DBSchema {
   movements: { key: string; value: Movement };
@@ -10,7 +12,7 @@ interface FinanceDB extends DBSchema {
   meta: { key: string; value: { key: string; value: unknown } };
 }
 
-export const defaultHomeWidgets: HomeWidgetId[] = ["balance", "projection", "fundingGoals", "progress", "forecasts", "recent"];
+export const defaultHomeWidgets: HomeWidgetId[] = ["balance", "spendable", "quickEntry", "projection", "categoryBudgets", "fundingGoals", "progress", "forecasts", "recent"];
 
 export const defaultSettings: AppSettings = {
   displayName: "Usuario",
@@ -19,6 +21,7 @@ export const defaultSettings: AppSettings = {
   homeWidgets: defaultHomeWidgets,
   currency: "EUR",
   updatedAt: "1970-01-01T00:00:00.000Z",
+  planningWidgetsVersion: 1,
 };
 
 export const defaultCategories: Category[] = [
@@ -46,6 +49,7 @@ const DB_NAME = "control-gastos";
 const SETTINGS_KEY = "main";
 const LEGACY_SCOPE = "legacy";
 let activeScope = LEGACY_SCOPE;
+export function activeStorageScope() { return activeScope; }
 
 function scopedDatabaseName(scope = activeScope) {
   return scope === LEGACY_SCOPE ? DB_NAME : `${DB_NAME}:${scope}`;
@@ -129,10 +133,44 @@ export async function loadAppData(): Promise<AppData> {
     closings: closings.sort((a, b) => b.month.localeCompare(a.month)),
     settings: {
       ...(settings ?? defaultSettings),
-      homeWidgets: settings?.homeWidgets ?? defaultHomeWidgets,
+      homeWidgets: settings?.planningWidgetsVersion === 1 ? settings.homeWidgets : [...new Set([...(settings?.homeWidgets ?? defaultHomeWidgets), "spendable", "categoryBudgets", "quickEntry"])] as HomeWidgetId[],
+      planningWidgetsVersion: 1,
       updatedAt: settings?.updatedAt ?? defaultSettings.updatedAt,
+      favorites: settings?.favorites ?? [],
+      categoryBudgets: settings?.categoryBudgets ?? [],
+      recurringSeries: settings?.recurringSeries ?? [],
     },
   };
+}
+
+export async function commitAppData(before: AppData, after: AppData, label?: string) {
+  const db = await database();
+  const tx = db.transaction(["movements", "closings", "settings", "outbox", "meta"], "readwrite");
+  const changes = dataChanges(before, after);
+  const queued = await tx.objectStore("outbox").getAll();
+  const now = Math.max(Date.now(), ...queued.map((item) => new Date(item.createdAt).getTime() + 1));
+  for (const [index, change] of changes.entries()) {
+    if (change.action === "saveMovement") await tx.objectStore("movements").put(change.payload as Movement);
+    if (change.action === "deleteMovement") await tx.objectStore("movements").delete((change.payload as { id: string }).id);
+    if (change.action === "saveClosing") await tx.objectStore("closings").put(change.payload as MonthlyClose);
+    if (change.action === "deleteClosing") await tx.objectStore("closings").delete((change.payload as { id: string }).id);
+    if (change.action === "saveSettings") await tx.objectStore("settings").put(after.settings, SETTINGS_KEY);
+    await tx.objectStore("outbox").put({ ...change, id: crypto.randomUUID(), createdAt: new Date(now + index).toISOString() });
+  }
+  if (label && changes.length) await tx.objectStore("meta").put({ key: "last-undo", value: { label, createdAt: new Date(now).toISOString(), before, after } satisfies UndoRecord });
+  if (!label) await tx.objectStore("meta").delete("last-undo");
+  await tx.done;
+}
+
+export async function ensureRecurringData(data: AppData, month: string) {
+  const additions = generateRecurring(data, month, new Date().toISOString());
+  if (!additions.length) return data;
+  // Preserve the last user undo; automatic generation is not an editable action.
+  const record = await getMetaValue<UndoRecord>("last-undo");
+  const next = { ...data, movements: [...data.movements, ...additions] };
+  await commitAppData(data, next);
+  if (record) await setMetaValue("last-undo", record);
+  return loadAppData();
 }
 
 export async function saveMovement(movement: Movement) {
@@ -206,13 +244,13 @@ export async function queueCloudAction(action: CloudAction, payload: unknown) {
   return item.id;
 }
 
-export async function listCloudActions() {
-  const db = await database();
+export async function listCloudActions(scope = activeScope) {
+  const db = await database(scope);
   return (await db.getAll("outbox")).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-export async function removeCloudAction(id: string) {
-  const db = await database();
+export async function removeCloudAction(id: string, scope = activeScope) {
+  const db = await database(scope);
   await db.delete("outbox", id);
 }
 

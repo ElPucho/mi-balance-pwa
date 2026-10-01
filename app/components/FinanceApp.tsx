@@ -102,20 +102,18 @@ import {
 } from "../lib/cloud";
 import {
   activateUserStorage,
-  clearUserData,
   deactivateUserStorage,
   defaultHomeWidgets,
   defaultSettings,
   loadAppData,
-  queueCloudAction,
-  removeMonthlyClose,
-  removeMovement,
-  removeSingleMovement,
-  saveMonthlyClose,
-  saveMovement,
-  saveSettings,
+  commitAppData,
+  ensureRecurringData,
+  getMetaValue,
 } from "../lib/storage";
-import type { AppData, AppSettings, Category, CloudAction, CloudState, HomeWidgetId, MonthlyClose, Movement, MovementKind } from "../lib/types";
+import type { AppData, AppSettings, Category, CloudState, HomeWidgetId, MonthlyClose, Movement, MovementKind, QuickTemplate } from "../lib/types";
+import { BudgetCards, SpendableCard, QuickEntries, PlanningSettings, BackupSettings, ClosingReview } from "./PlanningTools";
+import { conceptKey, generateRecurring, insightMovements, seriesForMovement, updateFutureSeries, type InsightQuery } from "../lib/planning";
+import { undoData, type UndoRecord } from "../lib/backups";
 
 type Tab = "home" | "movements" | "analysis" | "settings";
 type AnalysisPeriod = "month" | "year" | "plan";
@@ -193,13 +191,22 @@ export default function FinanceApp() {
   const [mounted, setMounted] = useState(false);
   const [cloud, setCloud] = useState<CloudState>({ mode: cloudConfigured ? "checking" : "disabled" });
   const [signedIn, setSignedIn] = useState(!cloudConfigured);
+  const [quickTemplate, setQuickTemplate] = useState<QuickTemplate>();
+  const [undo, setUndo] = useState<UndoRecord>();
+  const [insight, setInsight] = useState<InsightQuery>();
+  const mutationLock = useRef(false);
+  const deferredSync = useRef<{ email?: string } | undefined>(undefined);
 
   const refresh = useCallback(async () => {
-    const next = await loadAppData();
+    const next = await ensureRecurringData(await loadAppData(), monthKey(new Date()));
     setData(next);
+    setUndo(await getMetaValue<UndoRecord>("last-undo"));
   }, []);
 
-  const syncNow = useCallback(async (email?: string) => {
+  const syncNow = useCallback(async function synchronize(email?: string) {
+    if (mutationLock.current) { deferredSync.current = { email }; return false; }
+    mutationLock.current = true;
+    setLoading(true);
     setCloud({ mode: "syncing", email });
     let storageReady = false;
     try {
@@ -208,9 +215,12 @@ export default function FinanceApp() {
       await activateUserStorage(session.user.id);
       storageReady = true;
       setSignedIn(true);
-      const next = await synchronizeCloud();
+      const next = await ensureRecurringData(await synchronizeCloud(), monthKey(new Date()));
+      await flushCloudActions(session);
       setData(next);
+      setUndo(await getMetaValue<UndoRecord>("last-undo"));
       setCloud({ mode: "synced", email });
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : "No se pudo sincronizar";
       setCloud({ mode: navigator.onLine ? "error" : "offline", email, message });
@@ -218,8 +228,11 @@ export default function FinanceApp() {
         const local = await loadAppData().catch(() => emptyData);
         setData(local);
       }
+      return false;
     } finally {
-      setLoading(false);
+      mutationLock.current = false;
+      if (!deferredSync.current) setLoading(false);
+      if (deferredSync.current) { const pending = deferredSync.current; deferredSync.current = undefined; void synchronize(pending.email); }
     }
   }, []);
 
@@ -228,8 +241,9 @@ export default function FinanceApp() {
     const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
     if ("serviceWorker" in navigator) navigator.serviceWorker.register(`${basePath}/sw.js`).catch(() => undefined);
     if (!cloudConfigured) {
-      loadAppData().then((next) => {
+      loadAppData().then((next) => ensureRecurringData(next, monthKey(new Date()))).then(async (next) => {
         setData(next);
+        setUndo(await getMetaValue<UndoRecord>("last-undo"));
         setLoading(false);
       });
     } else {
@@ -248,11 +262,17 @@ export default function FinanceApp() {
     }
     const stopWatching = watchCloudSession((session, event) => {
       if (event === "INITIAL_SESSION") return;
-      if (session) void syncNow(session.user.email);
+      if (session) {
+        if (event === "SIGNED_IN") { setLoading(true); setData(emptyData); setUndo(undefined); setEditingMovement(undefined); setInsight(undefined); }
+        void syncNow(session.user.email);
+      }
       else if (cloudConfigured) {
         deactivateUserStorage();
         setSignedIn(false);
         setData(emptyData);
+        setUndo(undefined);
+        setInsight(undefined);
+        setEditingMovement(undefined);
         setCloud({ mode: "signedOut" });
       }
     });
@@ -260,103 +280,120 @@ export default function FinanceApp() {
       window.cancelAnimationFrame(frame);
       stopWatching();
     };
-  }, [syncNow]);
+  }, [syncNow, refresh]);
 
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), 2800);
+    const timer = window.setTimeout(() => setToast(null), 6500);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
   const notify = (message: string) => setToast(message);
 
-  async function queueAndSync(action: CloudAction, payload: unknown) {
-    await queueCloudAction(action, payload);
-    if (cloud.mode === "signedOut" || cloud.mode === "codeSent" || cloud.mode === "disabled") return;
+  useEffect(() => {
+    if (!cloudConfigured || !signedIn) return;
+    const retry = () => { if (!mutationLock.current) void syncNow(cloud.email); };
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, [signedIn, cloud.email, syncNow]);
+
+  async function applyUpdate(next: AppData, label?: string) {
+    if (mutationLock.current) throw new Error("Espera a que termine el guardado anterior.");
+    mutationLock.current = true;
     try {
-      await flushCloudActions();
-      setCloud((current) => ({ mode: "synced", email: current.email }));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Cambios pendientes";
-      setCloud((current) => ({ mode: navigator.onLine ? "error" : "offline", email: current.email, message }));
-    }
+      const before = await loadAppData();
+      const additions = generateRecurring(next, monthKey(new Date()), new Date().toISOString());
+      await commitAppData(before, { ...next, movements: [...next.movements, ...additions] }, label);
+      await refresh();
+      if (cloudConfigured && signedIn) {
+        try { await flushCloudActions(); setCloud((c) => ({ mode: "synced", email: c.email })); }
+        catch (e) { setCloud((c) => ({ mode: navigator.onLine ? "error" : "offline", email: c.email, message: cloudErrorMessage(e, "Guardado aquí · pendiente de sincronizar") })); }
+      }
+    } finally { mutationLock.current = false; if (deferredSync.current) { const pending = deferredSync.current; deferredSync.current = undefined; void syncNow(pending.email); } }
   }
 
-  async function handleMovementSave(movement: Movement) {
-    await saveMovement(movement);
-    await queueAndSync("saveMovement", movement);
-    await refresh();
+  async function handleUndo() {
+    try {
+      if (cloudConfigured && signedIn && (!navigator.onLine || !await syncNow(cloud.email))) throw new Error("Conecta y sincroniza antes de deshacer para comprobar los cambios de tus otros dispositivos.");
+      const record = await getMetaValue<UndoRecord>("last-undo"); if (!record) return; const current = await loadAppData(); await applyUpdate(undoData(current, record, new Date().toISOString())); notify(`Deshecho: ${record.label}`);
+    }
+    catch (e) { notify(e instanceof Error ? e.message : "No se pudo deshacer"); }
+  }
+
+  async function handleRestore(restored: AppData) {
+    if (restored.categories.some((c) => !data.categories.some((existing) => existing.id === c.id && existing.kind === c.kind))) throw new Error("La copia usa categorías que esta versión no reconoce. No se ha cambiado nada.");
+    await applyUpdate({ ...restored, categories: data.categories, settings: { ...restored.settings, updatedAt: new Date().toISOString() } }, "Restaurar copia");
+    notify("Copia restaurada. Puedes deshacer la restauración desde Ajustes.");
+  }
+
+  function requestQuickEntry(template: QuickTemplate) {
+    if (data.closings.some((c) => c.month === selectedMonth)) { notify("Reabre el mes antes de añadir movimientos"); return; }
+    setQuickTemplate(template); setEditingMovement(null);
+  }
+
+  async function handleMovementSave(movement: Movement, scope: "one" | "future" = "one", repeatInterval = 0) {
+    if (data.closings.some((c) => movement.date.startsWith(c.month))) { notify("Reabre el mes de destino antes de modificarlo"); return; }
+    let settings = data.settings;
+    let upserts = [movement];
+    if (scope === "future") { const update = updateFutureSeries(data, movement, new Date().toISOString()); settings = update.settings; upserts = update.movements; }
+    if (repeatInterval > 0 && !seriesForMovement(settings, movement)) settings = { ...settings, updatedAt: new Date().toISOString(), recurringSeries: [...(settings.recurringSeries ?? []), { id: crypto.randomUUID(), seedId: movement.id, concept: movement.concept, amountCents: movement.amountCents, categoryId: movement.categoryId, kind: movement.kind, startDate: movement.date, intervalMonths: repeatInterval, skipMonths: [], active: true }] };
+    const ids = new Set(upserts.map((m) => m.id));
+    await applyUpdate({ ...data, settings, movements: [...data.movements.filter((m) => !ids.has(m.id)), ...upserts] }, scope === "future" ? "Editar serie futura" : "Guardar movimiento");
     setEditingMovement(undefined);
     notify(movement.createdAt === movement.updatedAt ? "Movimiento añadido" : "Movimiento actualizado");
   }
 
   async function handleMovementDelete(id: string) {
-    const deletedIds = await removeMovement(id);
-    for (const deletedId of deletedIds) await queueCloudAction("deleteMovement", { id: deletedId });
-    if (cloud.mode !== "signedOut" && cloud.mode !== "codeSent" && cloud.mode !== "disabled") await flushCloudActions().catch(() => undefined);
-    await refresh();
+    const selected = data.movements.find((m) => m.id === id);
+    const deletedIds = selected?.fundingRole === "target" && selected.fundingPlanId ? data.movements.filter((m) => m.fundingPlanId === selected.fundingPlanId).map((m) => m.id) : [id];
+    if (data.movements.some((m) => deletedIds.includes(m.id) && data.closings.some((c) => m.date.startsWith(c.month)))) { notify("El plan incluye movimientos de un mes cerrado. Reábrelo primero."); return; }
+    const series = selected ? seriesForMovement(data.settings, selected) : undefined;
+    const settings = series && selected ? { ...data.settings, updatedAt: new Date().toISOString(), recurringSeries: data.settings.recurringSeries!.map((s) => s.id === series.id ? { ...s, skipMonths: [...new Set([...s.skipMonths, selected.date.slice(0, 7)])] } : s) } : data.settings;
+    const movements = data.movements.filter((m) => !deletedIds.includes(m.id)).map((m) => deletedIds.includes(m.forecastId ?? "") ? { ...m, forecastId: undefined, updatedAt: new Date().toISOString() } : m);
+    await applyUpdate({ ...data, settings, movements }, series ? "Omitir ocurrencia de serie" : "Eliminar movimiento");
     setEditingMovement(undefined);
     notify("Movimiento eliminado");
   }
 
   async function handleMovementCopies(copies: Movement[]) {
-    for (const copy of copies) {
-      await saveMovement(copy);
-      await queueCloudAction("saveMovement", copy);
-    }
-    if (cloud.mode !== "signedOut" && cloud.mode !== "codeSent" && cloud.mode !== "disabled") {
-      try {
-        await flushCloudActions();
-        setCloud((current) => ({ mode: "synced", email: current.email }));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Copias pendientes de sincronizar";
-        setCloud((current) => ({ mode: navigator.onLine ? "error" : "offline", email: current.email, message }));
-      }
-    }
-    await refresh();
+    if (copies.some((m) => data.closings.some((c) => m.date.startsWith(c.month)))) { notify("No se pueden crear copias en meses cerrados"); return; }
+    await applyUpdate({ ...data, movements: [...data.movements, ...copies] }, "Copiar previsiones");
     setEditingMovement(undefined);
     notify(copies.length === 1 ? "Previsión copiada a otro mes" : `${copies.length} previsiones creadas`);
   }
 
   async function handleFundingPlanCreate(items: Movement[]) {
-    for (const item of items) {
-      await saveMovement(item);
-      await queueCloudAction("saveMovement", item);
-    }
-    if (cloud.mode !== "signedOut" && cloud.mode !== "codeSent" && cloud.mode !== "disabled") await flushCloudActions().catch(() => undefined);
-    await refresh();
+    if (items.some((m) => data.closings.some((c) => m.date.startsWith(c.month)))) { notify("El plan contiene un mes cerrado. Reábrelo primero."); return; }
+    await applyUpdate({ ...data, movements: [...data.movements, ...items] }, "Crear plan de ahorro");
     setEditingMovement(undefined);
     notify(`Gasto fraccionado en ${Math.max(0, items.length - 1)} aportaciones mensuales`);
   }
 
   async function handleSettingsSave(settings: AppSettings) {
-    await saveSettings(settings);
-    await queueAndSync("saveSettings", settings);
-    await refresh();
+    if ([settings.monthlyBudgetCents, settings.monthlySavingGoalCents].some((n) => !Number.isInteger(n) || n < 0 || n > 2147483647)) throw new Error("El presupuesto y el ahorro deben ser importes positivos válidos o cero.");
+    if (settings.favorites?.some((f) => !f.concept.trim() || f.concept.length > 160 || !Number.isInteger(f.amountCents) || f.amountCents <= 0 || f.amountCents > 2147483647)) throw new Error("Revisa el concepto y el importe del favorito.");
+    await applyUpdate({ ...data, settings }, "Cambiar preferencias");
     notify("Preferencias guardadas");
   }
 
   async function handleClose(close: MonthlyClose, carryoverRequests?: ForecastCarryoverRequest[]) {
     const existing = data.closings.find((item) => item.month === close.month);
+    if (!existing && data.closings.some((c) => c.month > close.month)) { notify("Reabre primero los meses posteriores para cerrar en orden y conservar sus saldos"); return; }
+    if (carryoverRequests?.some((r) => data.closings.some((c) => c.month === r.targetMonth))) { notify("El mes de destino está cerrado. Reábrelo o elige otro mes."); return; }
     let finalClose = close;
+    let movements = data.movements;
     const needsCarryover = !existing || existing.snapshot.carriedForecasts === undefined;
     if (needsCarryover) {
       const carryover = createForecastCarryovers(data.movements, close.month, close.closedAt, carryoverRequests);
-      for (const movement of carryover.upserts) {
-        await saveMovement(movement);
-        await queueCloudAction("saveMovement", movement);
-      }
+      if (carryover.upserts.some((m) => m.amountCents > 2147483647)) { notify("Un importe acumulado supera el máximo permitido. Revisa el traslado."); return; }
+      const ids = new Set(carryover.upserts.map((m) => m.id));
+      movements = [...movements.filter((m) => !ids.has(m.id)), ...carryover.upserts];
       finalClose = {
         ...close,
         snapshot: { ...close.snapshot, carriedForecasts: carryover.carriedForecasts },
       };
     }
-    await saveMonthlyClose(finalClose);
-    await queueCloudAction("saveClosing", finalClose);
-    if (cloud.mode !== "signedOut" && cloud.mode !== "codeSent" && cloud.mode !== "disabled") {
-      await flushCloudActions().catch(() => undefined);
-    }
-    await refresh();
+    await applyUpdate({ ...data, movements, closings: [...data.closings.filter((c) => c.id !== finalClose.id), finalClose] }, "Cerrar mes");
     setCloseOpen(false);
     const carriedCount = finalClose.snapshot.carriedForecasts?.length ?? 0;
     notify(existing && !needsCarryover ? "Nota del cierre actualizada" : `${monthLabel(close.month)} cerrado${carriedCount > 0 ? ` · ${carriedCount} pendiente${carriedCount === 1 ? "" : "s"} acumulado${carriedCount === 1 ? "" : "s"}` : ""}`);
@@ -369,22 +406,9 @@ export default function FinanceApp() {
     }
 
     const reverted = revertForecastCarryovers(data.movements, close.snapshot.carriedForecasts ?? [], new Date().toISOString());
-    for (const movement of reverted.upserts) {
-      await saveMovement(movement);
-      await queueCloudAction("saveMovement", movement);
-    }
-    for (const targetId of reverted.deletes) {
-      const unlinked = await removeSingleMovement(targetId);
-      for (const movement of unlinked) await queueCloudAction("saveMovement", movement);
-      await queueCloudAction("deleteMovement", { id: targetId });
-    }
-
-    await removeMonthlyClose(close.id);
-    await queueCloudAction("deleteClosing", { id: close.id });
-    if (cloud.mode !== "signedOut" && cloud.mode !== "codeSent" && cloud.mode !== "disabled") {
-      await flushCloudActions().catch(() => undefined);
-    }
-    await refresh();
+    const ids = new Set(reverted.upserts.map((m) => m.id));
+    const movements = [...data.movements.filter((m) => !reverted.deletes.includes(m.id) && !ids.has(m.id)), ...reverted.upserts].map((m) => reverted.deletes.includes(m.forecastId ?? "") ? { ...m, forecastId: undefined, updatedAt: new Date().toISOString() } : m);
+    await applyUpdate({ ...data, movements, closings: data.closings.filter((c) => c.id !== close.id) }, "Reabrir mes");
     setCloseOpen(false);
     notify(`${monthLabel(close.month)} reabierto para modificaciones`);
   }
@@ -395,6 +419,7 @@ export default function FinanceApp() {
       return;
     }
     setEditingMovement(null);
+    setQuickTemplate(undefined);
   }
 
   function requestEditMovement(movement: Movement) {
@@ -406,9 +431,7 @@ export default function FinanceApp() {
   }
 
   async function handleClear() {
-    await clearUserData();
-    await queueAndSync("clearData", {});
-    await refresh();
+    await applyUpdate({ ...data, movements: [], closings: [], settings: { ...data.settings, updatedAt: new Date().toISOString(), recurringSeries: (data.settings.recurringSeries ?? []).map((s) => ({ ...s, active: false })) } }, "Borrar movimientos y cierres");
     notify("Movimientos y cierres eliminados");
   }
 
@@ -489,9 +512,11 @@ export default function FinanceApp() {
               onOpenMovements={() => setTab("movements")}
               onOpenAnalysis={() => setTab("analysis")}
               onCloseMonth={() => setCloseOpen(true)}
-              onReopenMonth={handleReopen}
+              onReopenMonth={(c) => void handleReopen(c).catch((e) => notify(cloudErrorMessage(e, "No se pudo reabrir")))}
               mounted={mounted}
-              onSaveSettings={handleSettingsSave}
+              onSaveSettings={(s) => void handleSettingsSave(s).catch((e) => notify(cloudErrorMessage(e, "No se pudo guardar")))}
+              onQuickEntry={requestQuickEntry}
+              onInspect={setInsight}
             />
           ) : tab === "movements" ? (
             <MovementsView
@@ -502,17 +527,21 @@ export default function FinanceApp() {
               onEdit={requestEditMovement}
             />
           ) : tab === "analysis" ? (
-            <AnalysisView data={data} month={selectedMonth} onMonthChange={setSelectedMonth} mounted={mounted} />
+            <AnalysisView data={data} month={selectedMonth} onMonthChange={setSelectedMonth} mounted={mounted} onInspect={setInsight} />
           ) : (
             <SettingsView
               data={data}
               cloud={cloud}
-              onSave={handleSettingsSave}
-              onClear={handleClear}
+              onSave={(s) => void handleSettingsSave(s).catch((e) => notify(cloudErrorMessage(e, "No se pudo guardar")))}
+              onClear={() => void handleClear().catch((e) => notify(cloudErrorMessage(e, "No se pudo borrar")))}
               onCloudConnect={handleCloudConnect}
               onCloudVerify={handleCloudVerify}
               onCloudSync={() => syncNow(cloud.email)}
               onCloudDisconnect={handleCloudDisconnect}
+              undo={undo}
+              onUndo={handleUndo}
+              onRestore={handleRestore}
+              onApply={applyUpdate}
             />
           )}
         </section>
@@ -538,6 +567,9 @@ export default function FinanceApp() {
             onCopy={handleMovementCopies}
             onCreateFundingPlan={handleFundingPlanCreate}
             onDelete={handleMovementDelete}
+            settings={data.settings}
+            quickTemplate={quickTemplate}
+            onFavorite={(template) => handleSettingsSave({ ...data.settings, updatedAt: new Date().toISOString(), favorites: [...(data.settings.favorites ?? []).filter((t) => conceptKey(t.concept) !== conceptKey(template.concept) || t.kind !== template.kind), template] })}
           />
         )}
         {closeOpen && (
@@ -549,13 +581,15 @@ export default function FinanceApp() {
             existing={data.closings.find((close) => close.month === selectedMonth)}
             onClose={() => setCloseOpen(false)}
             onSave={handleClose}
+            settings={data.settings}
           />
         )}
         {toast && (
           <div className="toast" role="status">
-            <Check size={18} /> {toast}
+            <Check size={18} /> <span>{toast}</span>{undo && <button onClick={() => void handleUndo()}>Deshacer</button>}
           </div>
         )}
+        {insight && <div className="sheet-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setInsight(undefined); }}><section className="sheet" role="dialog" aria-modal="true" aria-label="Movimientos del análisis"><div className="sheet-heading"><div><span className="eyebrow">Origen de la recomendación</span><h2>{insight.title}</h2></div><button aria-label="Cerrar análisis" onClick={() => setInsight(undefined)}><X size={22} /></button></div><p className="planning-help">{monthLabel(insight.fromMonth)} — {monthLabel(insight.toMonth)}. Pulsa un movimiento para revisar o editar su previsión. Los meses cerrados deben reabrirse antes.</p><div className="movement-list">{insightMovements(data, insight).map((m) => <MovementRow key={m.id} movement={m} movements={data.movements} categories={data.categories} onClick={() => { if (data.closings.some((c) => m.date.startsWith(c.month))) { notify("Reabre el mes de este movimiento desde Inicio para modificarlo"); return; } setInsight(undefined); requestEditMovement(m); }} />)}</div>{insightMovements(data, insight).length === 0 && <p>No hay movimientos en este período.</p>}</section></div>}
           </>
         )}
       </div>
@@ -701,7 +735,7 @@ function MonthSwitcher({ month, onChange, picker = false }: { month: string; onC
   );
 }
 
-function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, onOpenAnalysis, onCloseMonth, onReopenMonth, mounted, onSaveSettings }: {
+function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, onOpenAnalysis, onCloseMonth, onReopenMonth, mounted, onSaveSettings, onQuickEntry, onInspect }: {
   data: AppData;
   month: string;
   onMonthChange: (month: string) => void;
@@ -713,6 +747,8 @@ function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, 
   onReopenMonth: (close: MonthlyClose) => void;
   mounted: boolean;
   onSaveSettings: (settings: AppSettings) => void;
+  onQuickEntry: (template: QuickTemplate) => void;
+  onInspect: (query: InsightQuery) => void;
 }) {
   const [openForecastMonth, setOpenForecastMonth] = useState<string | null>(null);
   const [customizing, setCustomizing] = useState(false);
@@ -758,6 +794,10 @@ function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, 
           <div><PiggyBank size={17} /><span>Apartado<small>{formatMoney(current.savingCents)}</small></span></div>
         </div>
       </section>}
+
+      {show("spendable") && <SpendableCard data={data} month={month} today={todayInput()} />}
+      {show("quickEntry") && <QuickEntries settings={data.settings} onSelect={onQuickEntry} />}
+      {show("categoryBudgets") && <BudgetCards data={data} month={month} onInspect={onInspect} />}
 
       {show("projection") && <section className={`projection-card ${projected.resultCents >= 0 ? "positive" : "negative"}`}>
         <div>
@@ -860,6 +900,9 @@ function HomeView({ data, month, onMonthChange, onAdd, onEdit, onOpenMovements, 
 }
 
 const homeWidgetCatalog: Array<{ id: HomeWidgetId; label: string; description: string }> = [
+  { id: "spendable", label: "Cuánto puedo gastar", description: "Dinero libre sin ingresos aún pendientes y margen semanal" },
+  { id: "quickEntry", label: "Favoritos", description: "Atajos para registrar movimientos frecuentes" },
+  { id: "categoryBudgets", label: "Presupuestos por categoría", description: "Límites, gasto real y pendiente por grupo" },
   { id: "balance", label: "Balance del mes", description: "Disponible, ingresos, gastos y ahorro" },
   { id: "projection", label: "Previsión de cierre", description: "Cómo terminaría el mes" },
   { id: "fundingGoals", label: "Gastos fraccionados", description: "Progreso de tus ahorros anticipados" },
@@ -1007,7 +1050,7 @@ function MovementRow({ movement, movements, categories, onClick }: { movement: M
   );
 }
 
-function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; month: string; onMonthChange: (month: string) => void; mounted: boolean }) {
+function AnalysisView({ data, month, onMonthChange, mounted, onInspect }: { data: AppData; month: string; onMonthChange: (month: string) => void; mounted: boolean; onInspect: (query: InsightQuery) => void }) {
   const [period, setPeriod] = useState<AnalysisPeriod>("month");
   const [savingCut, setSavingCut] = useState(15);
   const snapshot = snapshotWithCarryover(data.movements, data.closings, month);
@@ -1052,7 +1095,8 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
             <MetricCard label="Ahorro real" value={savingInsights.actualSavings.ratePercent === null ? "—" : `${Math.round(savingInsights.actualSavings.ratePercent)}%`} foot={savingInsights.actualSavings.ratePercent === null ? "Añade ingresos para calcularlo" : `${formatMoney(savingInsights.actualSavings.savedCents)} después de gastos`} tone={savingInsights.actualSavings.savedCents >= 0 ? "good" : "warn"} />
             <MetricCard label="Cierre previsto" value={formatMoney(projected.resultCents)} foot={`Hoy tienes ${formatMoney(snapshot.resultCents)}`} tone={projected.resultCents >= 0 ? "good" : "warn"} />
           </div>
-          <SavingsInsights analysis={savingInsights} month={month} />
+          <SavingsInsights analysis={savingInsights} month={month} onInspect={onInspect} />
+          <BudgetCards data={data} month={month} onInspect={onInspect} />
           <section className="section-card chart-card">
             <div className="section-heading"><div><span className="eyebrow">Real + pendiente</span><h2>Cómo puede terminar el mes</h2></div></div>
             {mounted && <ResponsiveContainer width="100%" height={220}><BarChart data={forecastComparison} margin={{ top: 8, right: 4, left: 0, bottom: 0 }}><CartesianGrid stroke="#e9edf3" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#778197", fontSize: 11 }} axisLine={false} tickLine={false} /><YAxis width={82} tickFormatter={(value) => formatAmount(Number(value) * 100)} tick={{ fill: "#778197", fontSize: 10 }} axisLine={false} tickLine={false} /><Tooltip formatter={(value) => formatMoney(Number(value) * 100)} contentStyle={{ borderRadius: 14, border: "1px solid #e1e6ee" }} /><Bar dataKey="real" name="Realizado" fill="#a8b1c1" radius={[5, 5, 0, 0]} /><Bar dataKey="cierre" name="Cierre estimado" fill="#5b6ee1" radius={[5, 5, 0, 0]} /></BarChart></ResponsiveContainer>}
@@ -1114,7 +1158,7 @@ function AnalysisView({ data, month, onMonthChange, mounted }: { data: AppData; 
   );
 }
 
-function SavingsInsights({ analysis, month }: { analysis: SavingsAnalysis; month: string }) {
+function SavingsInsights({ analysis, month, onInspect }: { analysis: SavingsAnalysis; month: string; onInspect: (query: InsightQuery) => void }) {
   const { actualSavings, forecastComparisons, categoryTrends, recurringDiscretionary, repeatedForecastOverruns, expenseAverages } = analysis;
 
   return (
@@ -1144,6 +1188,7 @@ function SavingsInsights({ analysis, month }: { analysis: SavingsAnalysis; month
                     ? "Igual que la media"
                     : `${formatMoney(Math.abs(average.differenceCents))} ${average.differenceCents > 0 ? "más" : "menos"}${average.differencePercent === null ? "" : ` (${Math.abs(Math.round(average.differencePercent))}%)`}`}</em>
                 {average.observedMonths > 0 && average.observedMonths < average.months && <b>Con {average.observedMonths} mes{average.observedMonths === 1 ? "" : "es"} disponible{average.observedMonths === 1 ? "" : "s"}</b>}
+                <button className="text-button" onClick={() => onInspect({ title: `Gastos de los últimos ${average.months} meses`, fromMonth: moveMonth(month, -average.months), toMonth: moveMonth(month, -1), kind: "expense", onlyConfirmed: true })}>Ver gastos</button>
               </span>
             ))}
           </div>
@@ -1162,6 +1207,7 @@ function SavingsInsights({ analysis, month }: { analysis: SavingsAnalysis; month
                   <small>{Math.round(item.progressPercent)}% consumido</small>
                 </span>
                 <i><em className={item.varianceCents > 0 ? "over" : ""} style={{ width: `${Math.min(100, item.progressPercent)}%` }} /></i>
+                <button className="text-button insight-link" onClick={() => onInspect({ title: item.concept, concept: item.concept, fromMonth: month, toMonth: month, kind: "expense", linkedOnly: true })}>Ver y ajustar <ChevronRight size={15} /></button>
               </div>
             ))}
           </div>
@@ -1175,7 +1221,7 @@ function SavingsInsights({ analysis, month }: { analysis: SavingsAnalysis; month
             {categoryTrends.slice(0, 4).map((item) => (
               <div className="saving-signal-row" key={item.categoryId}>
                 <i style={{ background: item.color }} />
-                <span><strong>{item.name}</strong><small>{item.streakMonths} meses al alza: {formatMoney(item.startCents)} → {formatMoney(item.currentCents)}</small><em>Volver al nivel del mes anterior liberaría {formatMoney(item.currentCents - item.previousCents)}.</em></span>
+                <span><strong>{item.name}</strong><small>{item.streakMonths} meses al alza: {formatMoney(item.startCents)} → {formatMoney(item.currentCents)}</small><em>Volver al nivel del mes anterior liberaría {formatMoney(item.currentCents - item.previousCents)}.</em><button className="text-button" onClick={() => onInspect({ title: item.name, categoryId: item.categoryId, fromMonth: moveMonth(month, -(item.streakMonths - 1)), toMonth: month, kind: "expense", onlyConfirmed: true })}>Ver movimientos <ChevronRight size={15} /></button></span>
                 <b>+{Math.round(item.increasePercent)}%</b>
               </div>
             ))}
@@ -1189,7 +1235,7 @@ function SavingsInsights({ analysis, month }: { analysis: SavingsAnalysis; month
           <div className="saving-insight-list">
             {recurringDiscretionary.slice(0, 4).map((item) => (
               <div className="saving-signal-row recurring" key={item.key}>
-                <span><strong>{item.concept}</strong><small>{item.categoryName} · aparece en {item.activeMonths} de {item.windowMonths} meses</small><em>Reducirlo por completo liberaría unos {formatMoney(item.annualPotentialCents)} al año.</em></span>
+                <span><strong>{item.concept}</strong><small>{item.categoryName} · aparece en {item.activeMonths} de {item.windowMonths} meses</small><em>Reducirlo por completo liberaría unos {formatMoney(item.annualPotentialCents)} al año.</em><button className="text-button" onClick={() => onInspect({ title: item.concept, concept: item.concept, fromMonth: moveMonth(month, -(item.windowMonths - 1)), toMonth: month, kind: "expense", onlyConfirmed: true })}>Ver gastos <ChevronRight size={15} /></button></span>
                 <b>{formatMoney(item.monthlyAverageCents)}<small>/mes</small></b>
               </div>
             ))}
@@ -1203,7 +1249,7 @@ function SavingsInsights({ analysis, month }: { analysis: SavingsAnalysis; month
           <div className="saving-insight-list">
             {repeatedForecastOverruns.slice(0, 4).map((item) => (
               <div className="saving-signal-row overrun" key={item.key}>
-                <span><strong>{item.concept}</strong><small>Superada {item.overrunCount} de {item.executionCount} veces · previsión media {formatMoney(item.averagePlannedCents)}</small><em>El gasto real medio es {formatMoney(item.averageSpentCents)}; ajusta la previsión o reduce unos {formatMoney(item.averageOverrunCents)}.</em></span>
+                <span><strong>{item.concept}</strong><small>Superada {item.overrunCount} de {item.executionCount} veces · previsión media {formatMoney(item.averagePlannedCents)}</small><em>El gasto real medio es {formatMoney(item.averageSpentCents)}; ajusta la previsión o reduce unos {formatMoney(item.averageOverrunCents)}.</em><button className="text-button" onClick={() => onInspect({ title: item.concept, concept: item.concept, fromMonth: moveMonth(month, -11), toMonth: month, kind: "expense", linkedOnly: true })}>Ver y ajustar <ChevronRight size={15} /></button></span>
                 <b>+{formatMoney(item.averageOverrunCents)}</b>
               </div>
             ))}
@@ -1322,7 +1368,7 @@ function ChartEmpty() {
   return <div className="chart-empty"><BarChart3 size={27} /><strong>Aún no hay datos suficientes</strong><span>Los gráficos aparecerán cuando registres movimientos.</span></div>;
 }
 
-function SettingsView({ data, cloud, onSave, onClear, onCloudConnect, onCloudVerify, onCloudSync, onCloudDisconnect }: {
+function SettingsView({ data, cloud, onSave, onClear, onCloudConnect, onCloudVerify, onCloudSync, onCloudDisconnect, undo, onUndo, onRestore, onApply }: {
   data: AppData;
   cloud: CloudState;
   onSave: (settings: AppSettings) => void;
@@ -1331,6 +1377,10 @@ function SettingsView({ data, cloud, onSave, onClear, onCloudConnect, onCloudVer
   onCloudVerify: (email: string, code: string) => Promise<void>;
   onCloudSync: () => void;
   onCloudDisconnect: () => void;
+  undo?: UndoRecord;
+  onUndo: () => Promise<void>;
+  onRestore: (data: AppData) => Promise<void>;
+  onApply: (data: AppData, label: string) => Promise<void>;
 }) {
   const [name, setName] = useState(data.settings.displayName);
   const [budget, setBudget] = useState(formatAmount(data.settings.monthlyBudgetCents));
@@ -1347,6 +1397,11 @@ function SettingsView({ data, cloud, onSave, onClear, onCloudConnect, onCloudVer
     const timer = window.setTimeout(() => setResendSeconds((seconds) => Math.max(0, seconds - 1)), 1000);
     return () => window.clearTimeout(timer);
   }, [resendSeconds]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => { setName(data.settings.displayName); setBudget(formatAmount(data.settings.monthlyBudgetCents)); setGoal(formatAmount(data.settings.monthlySavingGoalCents)); });
+    return () => window.cancelAnimationFrame(frame);
+  }, [data.settings.displayName, data.settings.monthlyBudgetCents, data.settings.monthlySavingGoalCents]);
 
   function requestCode() {
     const value = email.trim();
@@ -1367,6 +1422,9 @@ function SettingsView({ data, cloud, onSave, onClear, onCloudConnect, onCloudVer
         </div>
         <button className="primary-button full" onClick={() => onSave({ ...data.settings, displayName: name.trim() || "Usuario", monthlyBudgetCents: parseAmount(budget), monthlySavingGoalCents: parseAmount(goal), currency: "EUR", updatedAt: new Date().toISOString() })}>Guardar preferencias</button>
       </section>
+
+      <PlanningSettings data={data} onSave={onSave} onApply={onApply} />
+      <BackupSettings data={data} undo={undo} onUndo={onUndo} onRestore={onRestore} />
 
       <section className="section-card cloud-card">
         <div className="settings-row"><span className="settings-icon cloud">{cloud.mode === "offline" ? <WifiOff size={21} /> : <Cloud size={21} />}</span><div><strong>Datos y sincronización</strong><small>{cloudLabel}</small></div><span className={`connection-dot ${cloud.mode === "synced" ? "online" : cloud.mode === "syncing" ? "working" : ""}`} /></div>
@@ -1402,37 +1460,37 @@ function SettingsView({ data, cloud, onSave, onClear, onCloudConnect, onCloudVer
 
       <section className="section-card data-card">
         <div className="section-heading"><div><span className="eyebrow">Privacidad</span><h2>Datos de la aplicación</h2></div></div>
-        {!confirmClear ? <button className="danger-link" onClick={() => setConfirmClear(true)}>Borrar movimientos y cierres</button> : <div className="confirm-delete"><span>¿Seguro? Esta acción no se puede deshacer.</span><button onClick={() => { onClear(); setConfirmClear(false); }}>Sí, borrar</button><button onClick={() => setConfirmClear(false)}>Cancelar</button></div>}
+        {!confirmClear ? <button className="danger-link" onClick={() => setConfirmClear(true)}>Borrar movimientos y cierres</button> : <div className="confirm-delete"><span>Se borrarán los movimientos y cierres y se pausarán las series. Descarga una copia antes. Podrás deshacerlo hasta el próximo cambio.</span><button onClick={() => { onClear(); setConfirmClear(false); }}>Sí, borrar</button><button onClick={() => setConfirmClear(false)}>Cancelar</button></div>}
       </section>
       <p className="version-note">Mi balance · PWA con sincronización segura</p>
     </div>
   );
 }
 
-function MovementSheet({ movement, categories, movements, selectedMonth, onClose, onSave, onCopy, onCreateFundingPlan, onDelete }: {
+function MovementSheet({ movement, categories, movements, selectedMonth, onClose, onSave, onCopy, onCreateFundingPlan, onDelete, settings, quickTemplate, onFavorite }: {
   movement: Movement | null;
   categories: Category[];
   movements: Movement[];
   selectedMonth: string;
   onClose: () => void;
-  onSave: (movement: Movement) => void;
-  onCopy: (movements: Movement[]) => void;
-  onCreateFundingPlan: (movements: Movement[]) => void;
-  onDelete: (id: string) => void;
+  onSave: (movement: Movement, scope?: "one" | "future", repeatInterval?: number) => Promise<void>;
+  onCopy: (movements: Movement[]) => Promise<void>;
+  onCreateFundingPlan: (movements: Movement[]) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
+  settings: AppSettings;
+  quickTemplate?: QuickTemplate;
+  onFavorite: (template: QuickTemplate) => Promise<void>;
 }) {
-  const initialKind = movement?.kind ?? "expense";
+  const initialKind = movement?.kind ?? quickTemplate?.kind ?? "expense";
   const initialDate = movement?.date ?? dateInputForMonth(selectedMonth);
-  const initialCategoryId = movement?.categoryId ?? categories.find((category) => category.kind === initialKind)?.id ?? "";
-  const initialForecastCandidates = movements.filter(
-    (item) => item.status === "planned" && item.kind === initialKind && item.categoryId === initialCategoryId && item.date.startsWith(initialDate.slice(0, 7)),
-  );
+  const initialCategoryId = movement?.categoryId ?? quickTemplate?.categoryId ?? categories.find((category) => category.kind === initialKind)?.id ?? "";
   const [kind, setKind] = useState<MovementKind>(initialKind);
-  const [amount, setAmount] = useState(movement ? formatAmount(movement.amountCents) : "");
-  const [concept, setConcept] = useState(movement?.concept ?? "");
+  const [amount, setAmount] = useState(movement ? formatAmount(movement.amountCents) : quickTemplate ? formatAmount(quickTemplate.amountCents) : "");
+  const [concept, setConcept] = useState(movement?.concept ?? quickTemplate?.concept ?? "");
   const [date, setDate] = useState(initialDate);
   const [categoryId, setCategoryId] = useState(initialCategoryId);
   const [planned, setPlanned] = useState(movement?.status === "planned");
-  const [forecastId, setForecastId] = useState(movement?.forecastId ?? (movement === null && initialForecastCandidates.length === 1 ? initialForecastCandidates[0].id : ""));
+  const [forecastId, setForecastId] = useState(movement?.forecastId ?? "");
   const [notes, setNotes] = useState(movement?.notes ?? "");
   const [copyOpen, setCopyOpen] = useState(false);
   const [copyYear, setCopyYear] = useState(Number(moveMonth(initialDate.slice(0, 7), 1).slice(0, 4)));
@@ -1440,10 +1498,16 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
   const [fractionExpense, setFractionExpense] = useState(false);
   const [installments, setInstallments] = useState(6);
   const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [repeatInterval, setRepeatInterval] = useState(0);
+  const [editScope, setEditScope] = useState<"one" | "future">("one");
+  const series = movement ? seriesForMovement(settings, movement) : undefined;
+  const suggestions = [...new Map(movements.filter((m) => m.kind === kind && m.id !== movement?.id && conceptKey(m.concept).includes(conceptKey(concept))).map((m) => [conceptKey(m.concept), m])).values()].slice(0, 3);
   const availableCategories = categories.filter((category) => category.kind === kind);
   const availableForecasts = movements.filter(
     (item) => item.id !== movement?.id && item.status === "planned" && item.kind === kind && item.date.startsWith(date.slice(0, 7)),
   );
+  const suggestedForecasts = availableForecasts.filter((m) => m.categoryId === categoryId || (concept.trim() && conceptKey(m.concept) === conceptKey(concept))).slice(0, 3);
   const currentUsage = movement?.status === "planned" ? forecastUsage(movements, movement) : null;
   const lockedForecast = Boolean(currentUsage && currentUsage.appliedCents > 0);
   const sourceMonth = date.slice(0, 7);
@@ -1461,19 +1525,25 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
     setForecastId("");
   }
 
-  function submit(statusOverride?: "confirmed") {
+  async function runAction(action: () => Promise<void>) {
+    if (saving) return;
+    setSaving(true); setError("");
+    try { await action(); } catch (e) { setError(e instanceof Error ? e.message : "No se pudo guardar. Tus datos anteriores siguen intactos."); } finally { setSaving(false); }
+  }
+
+  async function submit(statusOverride?: "confirmed") {
     const amountCents = parseAmount(amount);
-    if (!concept.trim() || amountCents <= 0 || !date || !categoryId) {
+    if (!concept.trim() || concept.trim().length > 160 || amountCents <= 0 || amountCents > 2147483647 || !date || !categoryId) {
       setError("Completa el importe, el concepto, la fecha y la categoría.");
       return;
     }
     const now = new Date().toISOString();
     const status = statusOverride ?? (planned ? "planned" : "confirmed");
     if (fractionExpense && movement === null) {
-      createFundingPlan(amountCents);
+      await runAction(() => createFundingPlan(amountCents));
       return;
     }
-    onSave({
+    await runAction(() => onSave({
       id: movement?.id ?? crypto.randomUUID(),
       concept: concept.trim(),
       amountCents,
@@ -1488,10 +1558,10 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
       notes: notes.trim(),
       createdAt: movement?.createdAt ?? now,
       updatedAt: movement ? now : now,
-    });
+    }, editScope, repeatInterval));
   }
 
-  function createFundingPlan(amountCents: number) {
+  async function createFundingPlan(amountCents: number) {
     if (kind !== "expense" || !planned || installments < 2 || installments > 120) {
       setError("El gasto fraccionado debe ser una previsión dividida entre 2 y 120 meses.");
       return;
@@ -1530,7 +1600,7 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
         updatedAt: timestamp,
       };
     });
-    onCreateFundingPlan([target, ...contributions]);
+    await onCreateFundingPlan([target, ...contributions]);
   }
 
   function createCopies() {
@@ -1559,7 +1629,7 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
         updatedAt: timestamp,
       };
     });
-    onCopy(copies);
+    void runAction(() => onCopy(copies));
   }
 
   function toggleCopyMonth(targetMonth: string) {
@@ -1592,18 +1662,20 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
         </div>
         <label className="amount-field"><span>Importe</span><div><AmountInput autoFocus value={amount} onValueChange={setAmount} /><b>€</b></div></label>
         <label className="field"><span>Concepto</span><input value={concept} onChange={(event) => setConcept(event.target.value)} placeholder={kind === "expense" ? "Ej. Supermercado" : kind === "income" ? "Ej. Nómina" : "Ej. Fondo de emergencia"} /></label>
+        {!movement && suggestions.length > 0 && <div className="concept-suggestions" aria-label="Conceptos recientes">{suggestions.map((m) => <button className="quiet-button" key={m.id} onClick={() => { setConcept(m.concept); setCategoryId(m.categoryId); if (!amount.trim()) setAmount(formatAmount(m.amountCents)); setForecastId(""); }}>{m.concept}</button>)}</div>}
         <div className="field-pair movement-date-category">
           <label className="field movement-date-field">
             <span>Fecha</span>
             <div className="movement-date-control">
               <span aria-hidden="true">{fullDateLabel(date)}</span>
               <CalendarDays aria-hidden="true" size={16} />
-              <input className="movement-native-date" type="date" aria-label="Fecha" value={date} onChange={(event) => { setDate(event.target.value); setForecastId(""); }} disabled={lockedForecast} />
+              <input className="movement-native-date" type="date" aria-label="Fecha" value={date} onChange={(event) => { if (series && event.target.value.slice(0, 7) !== initialDate.slice(0, 7)) { setError("Para mover esta ocurrencia a otro mes, omítela y crea una copia en el mes de destino."); return; } setDate(event.target.value); setForecastId(""); }} disabled={lockedForecast} />
             </div>
           </label>
           <label className="field"><span>Categoría</span><select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>{availableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
         </div>
         <label className="toggle-row"><span><strong>Es una previsión</strong><small>Aún no se ha producido</small></span><input type="checkbox" checked={planned} onChange={(event) => { setPlanned(event.target.checked); if (event.target.checked) setForecastId(""); }} disabled={lockedForecast} /><i /></label>
+        {series ? <div className="recurrence-panel"><strong>Serie: {series.concept}</strong><label className="field"><span>Aplicar estos cambios</span><select value={editScope} onChange={(e) => setEditScope(e.target.value as "one" | "future")}><option value="one">Solo este movimiento</option><option value="future">Este y las previsiones siguientes</option></select></label><small>Las siguientes cambian concepto, importe y categoría. No se modifican meses cerrados ni previsiones ya consumidas.</small></div> : !fractionExpense && !movement?.fundingPlanId && <div className="recurrence-panel"><label className="field"><span>Repetir como previsión</span><select value={[0, 1, 3, 12].includes(repeatInterval) ? repeatInterval : "custom"} onChange={(e) => setRepeatInterval(e.target.value === "custom" ? 2 : Number(e.target.value))}><option value={0}>No repetir</option><option value={1}>Cada mes</option><option value={3}>Cada trimestre</option><option value={12}>Cada año</option><option value="custom">Otro intervalo</option></select></label>{![0, 1, 3, 12].includes(repeatInterval) && <label className="field"><span>Cada cuántos meses</span><input type="number" inputMode="numeric" min={1} max={120} value={repeatInterval} onChange={(e) => setRepeatInterval(Math.min(120, Math.max(1, Number(e.target.value) || 1)))} /></label>}{repeatInterval > 0 && <small>Las próximas ocurrencias se crean como previsiones, nunca como gastos ya pagados.</small>}</div>}
         {kind === "expense" && movement === null && <label className="toggle-row funding-toggle"><span><strong>Ahorrar este gasto poco a poco</strong><small>Crea aportaciones mensuales antes de pagarlo</small></span><input type="checkbox" checked={fractionExpense} onChange={(event) => { setFractionExpense(event.target.checked); if (event.target.checked) { setPlanned(true); setForecastId(""); } }} /><i /></label>}
         {fractionExpense && movement === null && <div className="fraction-panel">
           <div className="fraction-heading"><span className="funding-goal-icon"><PiggyBank size={19} /></span><div><strong>Plan de ahorro para este gasto</strong><small>Las aportaciones terminan el mes anterior al pago.</small></div></div>
@@ -1611,6 +1683,7 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
           <div className="fraction-summary"><span>Aportación aproximada<strong>{formatMoney(estimatedInstallmentCents)} al mes</strong></span><span>Primera aportación<strong>{monthLabel(firstContributionMonth, "short")}</strong></span></div>
         </div>}
         {isFundingTarget && <div className="funding-plan-note"><Target size={18} /><span>Este gasto está fraccionado en <strong>{movement?.fundingInstallments ?? 0} mensualidades</strong>. Las aportaciones asociadas aparecen como previsiones de ahorro.</span></div>}
+        {!planned && suggestedForecasts.length > 0 && <div className="forecast-suggestions"><small>Previsiones relacionadas · elige si quieres descontarlo</small>{suggestedForecasts.map((m) => <button className={`secondary-button ${forecastId === m.id ? "selected" : ""}`} key={m.id} onClick={() => setForecastId(forecastId === m.id ? "" : m.id)}>{m.concept} · {formatMoney(forecastUsage(movements, m).remainingCents)} pendientes</button>)}</div>}
         {!planned && availableForecasts.length > 0 && (
           <label className="field forecast-link-field">
             <span>{kind === "expense" ? "Restar de una previsión" : "Aplicar a una previsión"}</span>
@@ -1627,8 +1700,9 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
         <label className="field"><span>Nota <em>opcional</em></span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Añade un detalle si te ayuda" rows={2} /></label>
         {lockedForecast && <p className="forecast-lock-note">Esta previsión ya tiene {formatMoney(currentUsage?.appliedCents ?? 0)} aplicado. Puedes ajustar su importe, pero no convertirla ni moverla de mes.</p>}
         {error && <p className="form-error">{error}</p>}
-        <button className="primary-button full large" onClick={() => submit()}>{movement ? <Pencil size={18} /> : fractionExpense ? <PiggyBank size={18} /> : <Plus size={18} />}{movement ? "Guardar cambios" : fractionExpense ? `Crear plan de ${installments} meses` : "Añadir movimiento"}</button>
-        {movement?.status === "planned" && <button className="secondary-button full convert-button" onClick={() => submit("confirmed")} disabled={lockedForecast}><Check size={17} /> Convertir en {kind === "expense" ? "gasto" : kind === "income" ? "ingreso" : "ahorro"} real</button>}
+        <button className="primary-button full large" disabled={saving} onClick={() => void submit()}>{movement ? <Pencil size={18} /> : fractionExpense ? <PiggyBank size={18} /> : <Plus size={18} />}{saving ? "Guardando…" : movement ? "Guardar cambios" : fractionExpense ? `Crear plan de ${installments} meses` : "Añadir movimiento"}</button>
+        <button className="secondary-button full" disabled={saving || !concept.trim() || parseAmount(amount) <= 0} onClick={() => void runAction(() => onFavorite({ id: crypto.randomUUID(), concept: concept.trim(), amountCents: parseAmount(amount), categoryId, kind }))}><Sparkles size={17} /> Guardar como favorito</button>
+        {movement?.status === "planned" && <button className="secondary-button full convert-button" onClick={() => void submit("confirmed")} disabled={lockedForecast || saving}><Check size={17} /> Convertir en {kind === "expense" ? "gasto" : kind === "income" ? "ingreso" : "ahorro"} real</button>}
         {movement && (
           <div className="copy-section">
             <button className="secondary-button full copy-toggle" type="button" aria-expanded={copyOpen} onClick={() => setCopyOpen((open) => !open)}><Copy size={17} /> Copiar a otros meses</button>
@@ -1650,7 +1724,7 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
             )}
           </div>
         )}
-        {movement && <button className="delete-button" onClick={() => onDelete(movement.id)}><Trash2 size={17} /> Eliminar movimiento</button>}
+        {movement && <button className="delete-button" disabled={saving} onClick={() => void runAction(() => onDelete(movement.id))}><Trash2 size={17} /> {series ? "Omitir este movimiento de la serie" : "Eliminar movimiento"}</button>}
       </section>
     </div>
   );
@@ -1663,12 +1737,13 @@ type CloseForecastDecision = {
   amountInput: string;
 };
 
-function CloseMonthSheet({ month, movements, categories, closings, existing, onClose, onSave }: {
+function CloseMonthSheet({ month, movements, categories, closings, existing, onClose, onSave, settings }: {
   month: string;
   movements: Movement[];
   categories: Category[];
   closings: MonthlyClose[];
   existing?: MonthlyClose;
+  settings: AppSettings;
   onClose: () => void;
   onSave: (close: MonthlyClose, carryoverRequests?: ForecastCarryoverRequest[]) => void;
 }) {
@@ -1712,6 +1787,7 @@ function CloseMonthSheet({ month, movements, categories, closings, existing, onC
         <div className="sheet-handle" />
         <div className="sheet-heading"><div><span className="eyebrow">Fotografía mensual</span><h2>{monthLabel(month)}</h2></div><button onClick={onClose} aria-label="Cerrar"><X size={22} /></button></div>
         <div className="close-summary"><div><span>Ingresos</span><strong>{formatMoney(snapshot.incomeCents)}</strong></div><div><span>Gastos</span><strong>{formatMoney(snapshot.expenseCents)}</strong></div><div><span>Ahorro</span><strong>{formatMoney(snapshot.savingCents)}</strong></div>{(snapshot.openingBalanceCents ?? 0) !== 0 && <div className="opening"><span>Saldo inicial</span><strong>{formatMoney(snapshot.openingBalanceCents ?? 0)}</strong></div>}<div className="result"><span>Disponible para {monthLabel(nextMonth, "short")}</span><strong>{formatMoney(snapshot.resultCents)}</strong></div></div>
+        <ClosingReview data={{ movements, categories, closings, settings }} month={month} />
 
         {canResolveCarryovers && pending.length > 0 && (
           <section className="close-assistant" aria-label="Decidir previsiones pendientes">

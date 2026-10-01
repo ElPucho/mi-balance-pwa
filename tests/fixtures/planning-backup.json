@@ -1,0 +1,29 @@
+{
+  "app": "mi-balance",
+  "version": 1,
+  "exportedAt": "2026-10-01T12:00:00.000Z",
+  "data": {
+    "movements": [
+      {"id":"12345678-1234-4234-9234-123456789001","concept":"Compra de prueba","amountCents":20025,"date":"2026-10-15","categoryId":"food","kind":"expense","status":"planned","createdAt":"2026-10-01T12:00:00.000Z","updatedAt":"2026-10-01T12:00:00.000Z"},
+      {"id":"12345678-1234-4234-9234-123456789002","concept":"Compra de prueba","amountCents":5025,"date":"2026-10-01","categoryId":"food","kind":"expense","status":"confirmed","forecastId":"12345678-1234-4234-9234-123456789001","createdAt":"2026-10-01T12:00:00.000Z","updatedAt":"2026-10-01T12:00:00.000Z"},
+      {"id":"12345678-1234-4234-9234-123456789003","concept":"Ingreso de prueba","amountCents":100050,"date":"2026-10-01","categoryId":"salary","kind":"income","status":"confirmed","createdAt":"2026-10-01T12:00:00.000Z","updatedAt":"2026-10-01T12:00:00.000Z"}
+    ],
+    "categories": [
+      {"id":"food","name":"Alimentación","kind":"expense","color":"#f09d51","icon":"shopping","essential":true},
+      {"id":"salary","name":"Nómina","kind":"income","color":"#129775","icon":"wallet"}
+    ],
+    "closings": [],
+    "settings": {
+      "displayName":"Datos ficticios QA",
+      "monthlyBudgetCents":0,
+      "monthlySavingGoalCents":5000,
+      "homeWidgets":["balance","spendable","quickEntry","categoryBudgets","projection","forecasts","recent"],
+      "currency":"EUR",
+      "updatedAt":"2026-10-01T12:00:00.000Z",
+      "planningWidgetsVersion":1,
+      "favorites":[{"id":"12345678-1234-4234-9234-123456789004","concept":"Compra de prueba","amountCents":5025,"categoryId":"food","kind":"expense"}],
+      "categoryBudgets":[{"categoryId":"food","monthlyCents":30075,"rollover":true,"startMonth":"2026-10"}],
+      "recurringSeries":[]
+    }
+  }
+}

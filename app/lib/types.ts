@@ -9,7 +9,14 @@ export type HomeWidgetId =
   | "forecasts"
   | "recent"
   | "categoryChart"
-  | "annualChart";
+  | "annualChart"
+  | "spendable"
+  | "categoryBudgets"
+  | "quickEntry";
+
+export type QuickTemplate = { id: string; concept: string; amountCents: number; categoryId: string; kind: MovementKind };
+export type CategoryBudget = { categoryId: string; monthlyCents: number; rollover: boolean; startMonth: string; revisions?: { startMonth: string; monthlyCents: number; rollover: boolean }[] };
+export type RecurringSeries = QuickTemplate & { startDate: string; intervalMonths: number; seedId: string; active: boolean; skipMonths: string[]; endMonth?: string };
 
 export type Movement = {
   id: string;
@@ -69,6 +76,10 @@ export type AppSettings = {
   homeWidgets: HomeWidgetId[];
   currency: "EUR";
   updatedAt: string;
+  favorites?: QuickTemplate[];
+  categoryBudgets?: CategoryBudget[];
+  recurringSeries?: RecurringSeries[];
+  planningWidgetsVersion?: number;
 };
 
 export type CloudAction =

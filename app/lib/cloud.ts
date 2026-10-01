@@ -1,6 +1,7 @@
 import { createClient, type AuthChangeEvent, type Session } from "@supabase/supabase-js";
-import { defaultHomeWidgets, getMetaValue, listCloudActions, loadAppData, removeCloudAction, replaceCachedData, setMetaValue } from "./storage";
+import { activeStorageScope, defaultHomeWidgets, getMetaValue, listCloudActions, loadAppData, removeCloudAction, replaceCachedData, setMetaValue } from "./storage";
 import type { AppData, AppSettings, CloudAction, MonthlyClose, Movement } from "./types";
+import { planningPreferences } from "./backups";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? "";
@@ -136,6 +137,7 @@ async function sendAction(action: CloudAction, payload: unknown, userId: string)
       monthly_budget_cents: settings.monthlyBudgetCents,
       monthly_saving_goal_cents: settings.monthlySavingGoalCents,
       home_widgets: settings.homeWidgets,
+      preferences: planningPreferences(settings),
       updated_at: settings.updatedAt,
     });
     if (error) throw error;
@@ -173,22 +175,30 @@ async function sendAction(action: CloudAction, payload: unknown, userId: string)
   if (closings.error) throw closings.error;
 }
 
+let flushChain: Promise<void> = Promise.resolve();
 export async function flushCloudActions(session?: Session | null) {
   const activeSession = session ?? (await getCloudSession());
   if (!activeSession) throw new Error("CLOUD_NOT_SIGNED_IN");
-  const actions = await listCloudActions();
-  for (const item of actions) {
-    await sendAction(item.action, item.payload, activeSession.user.id);
-    await removeCloudAction(item.id);
-  }
+  const scope = activeStorageScope();
+  const run = flushChain.catch(() => undefined).then(async () => {
+    if (scope !== `user-${activeSession.user.id}` || activeStorageScope() !== scope) throw new Error("La sesión ha cambiado; no se enviaron datos de otra cuenta.");
+    const actions = await listCloudActions(scope);
+    for (const item of actions) {
+      if (activeStorageScope() !== scope) throw new Error("La sesión ha cambiado. Los cambios siguen pendientes en su cuenta.");
+      await sendAction(item.action, item.payload, activeSession.user.id);
+      await removeCloudAction(item.id, scope);
+    }
+  });
+  flushChain = run;
+  return run;
 }
 
 async function fetchRemoteData(userId: string): Promise<RemoteData> {
   const client = requireClient();
   const [profileResult, movementResult, closingResult] = await Promise.all([
-    client.from("profiles").select("display_name, monthly_budget_cents, monthly_saving_goal_cents, home_widgets, updated_at").eq("id", userId).maybeSingle(),
-    client.from("movements").select("id, concept, amount_cents, movement_date, category_id, kind, status, forecast_id, funding_plan_id, funding_role, funding_installments, notes, created_at, updated_at").order("movement_date", { ascending: false }),
-    client.from("monthly_closings").select("id, month, notes, snapshot, closed_at").order("month", { ascending: false }),
+    client.from("profiles").select("display_name, monthly_budget_cents, monthly_saving_goal_cents, home_widgets, preferences, updated_at").eq("id", userId).maybeSingle(),
+    client.from("movements").select("id, concept, amount_cents, movement_date, category_id, kind, status, forecast_id, funding_plan_id, funding_role, funding_installments, notes, created_at, updated_at").eq("user_id", userId).order("movement_date", { ascending: false }),
+    client.from("monthly_closings").select("id, month, notes, snapshot, closed_at").eq("user_id", userId).order("month", { ascending: false }),
   ]);
   if (profileResult.error) throw profileResult.error;
   if (movementResult.error) throw movementResult.error;
@@ -203,6 +213,8 @@ async function fetchRemoteData(userId: string): Promise<RemoteData> {
           homeWidgets: profileResult.data.home_widgets ?? defaultHomeWidgets,
           currency: "EUR",
           updatedAt: profileResult.data.updated_at,
+          ...planningPreferences(profileResult.data.preferences ?? {} as AppSettings),
+          planningWidgetsVersion: profileResult.data.preferences?.planningWidgetsVersion ?? 0,
         }
       : null,
     movements: (movementResult.data ?? []).map((movement) => ({
@@ -269,6 +281,7 @@ export async function synchronizeCloud(localData?: AppData) {
     remote = await fetchRemoteData(session.user.id);
   }
 
+  if ((await getCloudSession())?.user.id !== session.user.id || activeStorageScope() !== `user-${session.user.id}`) throw new Error("La cuenta ha cambiado durante la sincronización. No se han mezclado los datos.");
   await replaceCachedData({
     movements: remote.movements,
     closings: remote.closings,

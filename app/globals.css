@@ -3151,3 +3151,43 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Planning and recovery: flexible controls stay usable on narrow iPhone screens. */
+.planning-help { color: var(--muted, #778197); font-size: 12px; line-height: 1.6; margin: 10px 0; }
+.planning-stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 18px 0; }
+.planning-stat-grid span { min-width: 0; font-size: 11px; color: #778197; }
+.planning-stat-grid b { display: block; margin-top: 4px; font-size: 15px; color: #26344d; overflow-wrap: anywhere; }
+.spendable-card > strong { display: block; margin-top: 14px; font-size: clamp(24px, 8vw, 34px); overflow-wrap: anywhere; }
+.spendable-card > p, .spendable-card > small { font-size: 12px; color: #6a758a; line-height: 1.6; }
+.quick-entry-list, .planning-actions, .concept-suggestions, .forecast-suggestions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.quick-entry-list button { max-width: 100%; min-height: 48px; justify-content: flex-start; text-align: left; }
+.quick-entry-list span { min-width: 0; overflow-wrap: anywhere; }
+.quick-entry-list small { display: block; margin-top: 3px; }
+.planning-actions > button { min-height: 44px; flex: 1 1 130px; white-space: normal; }
+.concept-suggestions button { min-height: 44px; padding: 8px 12px; max-width: 100%; overflow-wrap: anywhere; }
+.forecast-suggestions { flex-direction: column; }
+.forecast-suggestions .selected { border-color: #5977cf; background: #edf1ff; }
+.forecast-suggestions button { min-height: 44px; white-space: normal; text-align: left; }
+.forecast-suggestions > small { color: #6a758a; font-size: 12px; }
+.recurrence-panel, .backup-preview, .closing-review { padding: 16px; border: 1px solid #e0e6ef; border-radius: 16px; background: #f7f9fd; margin: 16px 0; min-width: 0; }
+.recurrence-panel small, .closing-review p, .closing-review > small, .backup-preview p { font-size: 12px; line-height: 1.6; color: #6a758a; }
+.recurrence-panel .field { margin-top: 12px; }
+.budget-list { display: grid; gap: 14px; margin-top: 16px; }
+.budget-item { min-width: 0; padding-bottom: 12px; border-bottom: 1px solid #e8edf3; }
+.budget-item > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.budget-item strong { font-size: 13px; overflow-wrap: anywhere; }
+.budget-item b { font-size: 12px; }
+.budget-item small { display: block; font-size: 11px; color: #6a758a; line-height: 1.6; margin-top: 5px; }
+.budget-item progress { display: block; width: 100%; height: 8px; margin-top: 10px; accent-color: #5977cf; border-radius: 8px; }
+.planning-setting-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: 12px; min-width: 0; }
+.planning-setting-row > :first-child { min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.planning-setting-row .icon-button { flex-shrink: 0; width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid #e0e6ef; border-radius: 12px; background: white; color: #d75169; }
+.planning-series { padding: 14px 0; border-top: 1px solid #e8edf3; }
+.planning-series > strong, .planning-series > small { display: block; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.planning-series > small { color: #6a758a; font-size: 11px; }
+.insight-link { grid-column: 1 / -1; justify-self: start; }
+.saving-signal-row .text-button, .average-comparison-grid .text-button, .budget-item .text-button { min-height: 44px; white-space: normal; font-size: 11px; text-align: left; }
+.toast { gap: 8px; max-width: calc(100vw - 24px); }
+.toast > span { min-width: 0; overflow-wrap: anywhere; }
+.toast > button { flex-shrink: 0; min-height: 44px; color: white; border: 1px solid #ffffff55; border-radius: 8px; padding: 4px 9px; background: transparent; font-size: 12px; }
+.settings-card input[type="file"] { max-width: 100%; font-size: 12px; padding: 12px 8px; }

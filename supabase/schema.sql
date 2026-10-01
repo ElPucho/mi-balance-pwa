@@ -9,8 +9,12 @@ create table if not exists public.profiles (
   monthly_budget_cents integer not null default 0 check (monthly_budget_cents >= 0),
   monthly_saving_goal_cents integer not null default 0 check (monthly_saving_goal_cents >= 0),
   home_widgets jsonb not null default '["balance","projection","fundingGoals","progress","forecasts","recent"]'::jsonb,
+  preferences jsonb not null default '{}'::jsonb check (jsonb_typeof(preferences) = 'object'),
   updated_at timestamptz not null default now()
 );
+
+-- Additive upgrade for existing installations; existing account isolation applies.
+alter table public.profiles add column if not exists preferences jsonb not null default '{}'::jsonb check (jsonb_typeof(preferences) = 'object');
 
 create table if not exists public.movements (
   id uuid primary key,
