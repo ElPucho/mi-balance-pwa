@@ -16,7 +16,7 @@ export type HomeWidgetId =
 
 export type QuickTemplate = { id: string; concept: string; amountCents: number; categoryId: string; kind: MovementKind };
 export type CategoryBudget = { categoryId: string; monthlyCents: number; rollover: boolean; startMonth: string; revisions?: { startMonth: string; monthlyCents: number; rollover: boolean }[] };
-export type RecurringSeries = QuickTemplate & { startDate: string; intervalMonths: number; seedId: string; active: boolean; skipMonths: string[]; endMonth?: string };
+export type RecurringSeries = QuickTemplate & { startDate: string; intervalMonths: number; seedId: string; active: boolean; skipMonths: string[]; endMonth?: string; amountRevisions?: { fromMonth: string; amountCents: number }[] };
 
 export type Movement = {
   id: string;

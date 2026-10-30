@@ -2516,6 +2516,20 @@ button:disabled {
   margin-top: 9px;
 }
 
+.concept-bulk-section { display: grid; gap: 10px; margin-top: 12px; min-width: 0; }
+.concept-bulk-panel { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: #f8f9fb; min-width: 0; overflow-wrap: anywhere; }
+.concept-bulk-panel p, .concept-bulk-summary { margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.concept-bulk-checkbox { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.45; }
+.concept-bulk-checkbox input { flex: 0 0 20px; width: 20px; height: 20px; margin-top: 2px; accent-color: var(--primary); }
+.concept-bulk-summary { display: grid; gap: 6px; }
+.concept-bulk-summary b { color: var(--ink); }
+.concept-bulk-summary summary { cursor: pointer; padding: 8px 0; }
+.concept-bulk-summary ul { margin: 0; padding-left: 18px; max-height: 150px; overflow-y: auto; }
+.concept-bulk-confirm { display: grid; gap: 12px; padding: 12px; background: white; border: 1px solid var(--line); border-radius: 12px; }
+.concept-bulk-panel .delete-button { margin: 0; min-height: 44px; }
+.concept-bulk-panel .field { margin: 0; min-width: 0; }
+.concept-bulk-panel .form-error { color: #b91c1c; }
+
 .copy-panel {
   display: grid;
   gap: 10px;

@@ -112,8 +112,9 @@ import {
 } from "../lib/storage";
 import type { AppData, AppSettings, Category, CloudState, HomeWidgetId, MonthlyClose, Movement, MovementKind, QuickTemplate } from "../lib/types";
 import { BudgetCards, SpendableCard, QuickEntries, PlanningSettings, BackupSettings, ClosingReview } from "./PlanningTools";
-import { conceptKey, generateRecurring, insightMovements, seriesForMovement, updateFutureSeries, type InsightQuery } from "../lib/planning";
+import { applyConceptBulkChanges, conceptKey, generateRecurring, insightMovements, previewConceptBulkChanges, seriesForMovement, updateFutureSeries, type ConceptBulkAction, type InsightQuery } from "../lib/planning";
 import { undoData, type UndoRecord } from "../lib/backups";
+import { ConceptBulkActions } from "./ConceptBulkActions";
 
 type Tab = "home" | "movements" | "analysis" | "settings";
 type AnalysisPeriod = "month" | "year" | "plan";
@@ -355,6 +356,16 @@ export default function FinanceApp() {
     notify("Movimiento eliminado");
   }
 
+  async function handleConceptBulk(movement: Movement, action: ConceptBulkAction, includeConfirmed: boolean, signature: string) {
+    const current = await loadAppData();
+    const preview = previewConceptBulkChanges(current, movement, selectedMonth, includeConfirmed);
+    if (JSON.stringify(preview) !== signature) throw new Error("Los datos han cambiado. Revisa de nuevo los movimientos afectados.");
+    const next = applyConceptBulkChanges(current, movement, selectedMonth, action, new Date().toISOString(), includeConfirmed);
+    await applyUpdate(next, action.kind === "delete" ? `Eliminar concepto: ${movement.concept}` : `Cambiar importe del concepto: ${movement.concept}`);
+    setEditingMovement(undefined);
+    notify(`${preview.movements.length} movimientos ${action.kind === "delete" ? "eliminados" : "actualizados"} · ${preview.series.length} ${preview.series.length === 1 ? "serie ajustada" : "series ajustadas"}`);
+  }
+
   async function handleMovementCopies(copies: Movement[]) {
     if (copies.some((m) => data.closings.some((c) => m.date.startsWith(c.month)))) { notify("No se pueden crear copias en meses cerrados"); return; }
     await applyUpdate({ ...data, movements: [...data.movements, ...copies] }, "Copiar previsiones");
@@ -561,12 +572,14 @@ export default function FinanceApp() {
             movement={editingMovement}
             categories={data.categories}
             movements={data.movements}
+            closings={data.closings}
             selectedMonth={selectedMonth}
             onClose={() => setEditingMovement(undefined)}
             onSave={handleMovementSave}
             onCopy={handleMovementCopies}
             onCreateFundingPlan={handleFundingPlanCreate}
             onDelete={handleMovementDelete}
+            onBulk={handleConceptBulk}
             settings={data.settings}
             quickTemplate={quickTemplate}
             onFavorite={(template) => handleSettingsSave({ ...data.settings, updatedAt: new Date().toISOString(), favorites: [...(data.settings.favorites ?? []).filter((t) => conceptKey(t.concept) !== conceptKey(template.concept) || t.kind !== template.kind), template] })}
@@ -1467,16 +1480,18 @@ function SettingsView({ data, cloud, onSave, onClear, onCloudConnect, onCloudVer
   );
 }
 
-function MovementSheet({ movement, categories, movements, selectedMonth, onClose, onSave, onCopy, onCreateFundingPlan, onDelete, settings, quickTemplate, onFavorite }: {
+function MovementSheet({ movement, categories, movements, closings, selectedMonth, onClose, onSave, onCopy, onCreateFundingPlan, onDelete, onBulk, settings, quickTemplate, onFavorite }: {
   movement: Movement | null;
   categories: Category[];
   movements: Movement[];
+  closings: MonthlyClose[];
   selectedMonth: string;
   onClose: () => void;
   onSave: (movement: Movement, scope?: "one" | "future", repeatInterval?: number) => Promise<void>;
   onCopy: (movements: Movement[]) => Promise<void>;
   onCreateFundingPlan: (movements: Movement[]) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onBulk: (movement: Movement, action: ConceptBulkAction, includeConfirmed: boolean, signature: string) => Promise<void>;
   settings: AppSettings;
   quickTemplate?: QuickTemplate;
   onFavorite: (template: QuickTemplate) => Promise<void>;
@@ -1525,10 +1540,10 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
     setForecastId("");
   }
 
-  async function runAction(action: () => Promise<void>) {
+  async function runAction(action: () => Promise<void>, rethrow = false) {
     if (saving) return;
     setSaving(true); setError("");
-    try { await action(); } catch (e) { setError(e instanceof Error ? e.message : "No se pudo guardar. Tus datos anteriores siguen intactos."); } finally { setSaving(false); }
+    try { await action(); } catch (e) { if (rethrow) throw e; setError(e instanceof Error ? e.message : "No se pudo guardar. Tus datos anteriores siguen intactos."); } finally { setSaving(false); }
   }
 
   async function submit(statusOverride?: "confirmed") {
@@ -1724,6 +1739,7 @@ function MovementSheet({ movement, categories, movements, selectedMonth, onClose
             )}
           </div>
         )}
+        {movement && <ConceptBulkActions data={{ movements, categories, closings, settings }} movement={movement} month={selectedMonth} disabled={saving} onApply={(action, includeConfirmed, signature) => runAction(() => onBulk(movement, action, includeConfirmed, signature), true)} />}
         {movement && <button className="delete-button" disabled={saving} onClick={() => void runAction(() => onDelete(movement.id))}><Trash2 size={17} /> {series ? "Omitir este movimiento de la serie" : "Eliminar movimiento"}</button>}
       </section>
     </div>

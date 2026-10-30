@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { categoryBudgetForMonth, generateRecurring, insightMovements, occurrenceId, seriesForMovement, spendableForMonth, updateFutureSeries } from "../app/lib/planning.ts";
+import { applyConceptBulkChanges, categoryBudgetForMonth, generateRecurring, insightMovements, occurrenceId, previewConceptBulkChanges, seriesAmountForMonth, seriesForMovement, spendableForMonth, updateFutureSeries } from "../app/lib/planning.ts";
 import { dataChanges, exportBackup, exportCsv, importBackup, undoData, type UndoRecord } from "../app/lib/backups.ts";
 import type { AppData, MonthlyClose, Movement, RecurringSeries } from "../app/lib/types.ts";
 
@@ -35,7 +35,7 @@ test("series: cambios futuros conservan gastos reales, previsiones consumidas y 
   const oct = movement({ id: occurrenceId(s, "2026-10") }), nov = movement({ id: occurrenceId(s, "2026-11"), date: "2026-11-15" }), dec = movement({ id: occurrenceId(s, "2026-12"), date: "2026-12-15" }), jan = movement({ id: occurrenceId(s, "2027-01"), date: "2027-01-15" });
   state.movements = [oct, nov, dec, jan, movement({ forecastId: nov.id, date: "2026-11-16", status: "confirmed", amountCents: 500 })]; state.closings = [close("2026-12")];
   const result = updateFutureSeries(state, { ...oct, amountCents: 50000 }, now);
-  assert.deepEqual(result.movements.map((m) => m.id), [oct.id, jan.id]); assert.equal(result.settings.recurringSeries![0].amountCents, 50000);
+  assert.deepEqual(result.movements.map((m) => m.id), [oct.id, jan.id]); assert.equal(seriesAmountForMonth(result.settings.recurringSeries![0], "2027-01"), 50000); assert.equal(seriesAmountForMonth(result.settings.recurringSeries![0], "2026-09"), s.amountCents);
 });
 test("disponible: descuenta pendiente y objetivo de ahorro sin contar ingresos esperados ni duplicar previsiones", () => {
   const f = movement({ amountCents: 20000 }); const state = data([f, movement({ status: "confirmed", amountCents: 8000, forecastId: f.id }), movement({ kind: "income", categoryId: "salary", status: "confirmed", amountCents: 100000 }), movement({ kind: "income", categoryId: "salary", amountCents: 50000 }), movement({ kind: "saving", categoryId: "goals", status: "confirmed", amountCents: 5000 })]);
@@ -89,4 +89,112 @@ test("copia inválida: no acepta enlaces rotos, cifras fuera de rango, fechas in
 });
 test("CSV de Excel usa dos decimales, punto de miles, BOM y neutraliza fórmulas en texto", () => {
   const csv = exportCsv(data([movement({ concept: '=HYPERLINK("x")', amountCents: 123456, notes: "Nota;con separador" })])); assert.equal(csv.startsWith("\uFEFF"), true); assert.match(csv, /1\.234,56/); assert.match(csv, /'=HYPERLINK/); assert.match(csv, /"Nota;con separador"/); assert.match(csv, /""x""/);
+});
+
+test("conceptos: incluye todo el mes seleccionado y futuro sin límite, por nombre normalizado y tipo, incluso copias de otra categoría", () => {
+  const source = movement({ date: "2026-10-30" });
+  const firstDay = movement({ date: "2026-10-01", concept: "  RÓPA  " });
+  const farFuture = movement({ date: "2030-02-01", categoryId: "other" });
+  const past = movement({ date: "2026-09-30" }), similar = movement({ concept: "Ropa deportiva" }), income = movement({ kind: "income" });
+  const state = data([source, firstDay, farFuture, past, similar, income]);
+  const original = structuredClone(state);
+  const result = applyConceptBulkChanges(state, source, "2026-10", { kind: "amount", amountCents: 123456 }, now);
+  assert.deepEqual(previewConceptBulkChanges(state, source, "2026-10").movements.map((m) => m.id), [firstDay.id, source.id, farFuture.id]);
+  for (const m of result.movements) assert.deepEqual(m, [source.id, firstDay.id, farFuture.id].includes(m.id) ? { ...state.movements.find((before) => before.id === m.id), amountCents: 123456, updatedAt: now } : state.movements.find((before) => before.id === m.id));
+  assert.deepEqual(state, original);
+});
+
+test("conceptos: protege meses cerrados, planes, arrastres y previsiones aplicadas; realizados requieren permiso explícito", () => {
+  const source = movement(); const closed = movement({ date: "2026-11-15" });
+  const target = movement(), applied = movement();
+  const actual = movement({ status: "confirmed", forecastId: applied.id });
+  const funding = movement({ fundingPlanId: crypto.randomUUID(), fundingRole: "target" });
+  const state = data([source, closed, target, applied, actual, funding]);
+  state.closings = [close("2026-11"), { ...close("2026-09"), snapshot: { ...close("2026-09").snapshot, carriedForecasts: [{ sourceForecastId: crypto.randomUUID(), targetMovementId: target.id, amountCents: 5000 }] } }];
+  const preview = previewConceptBulkChanges(state, source, "2026-10");
+  assert.deepEqual(preview.movements.map((m) => m.id), [source.id]);
+  assert.deepEqual(preview.excluded, { closed: 1, funding: 1, carried: 1, linked: 1, confirmed: 1 });
+  const result = applyConceptBulkChanges(state, source, "2026-10", { kind: "delete" }, now);
+  assert.deepEqual(result.movements, state.movements.filter((m) => m.id !== source.id)); assert.deepEqual(result.closings, state.closings);
+  const withActual = applyConceptBulkChanges(state, source, "2026-10", { kind: "amount", amountCents: 2222 }, now, true);
+  assert.equal(withActual.movements.find((m) => m.id === actual.id)?.amountCents, 2222);
+  assert.equal(withActual.movements.find((m) => m.id === actual.id)?.forecastId, applied.id);
+  assert.equal(withActual.movements.find((m) => m.id === applied.id)?.amountCents, applied.amountCents);
+});
+
+test("conceptos: eliminar realizados optativamente conserva su previsión y no deja referencias rotas", () => {
+  const forecast = movement(), actual = movement({ status: "confirmed", forecastId: forecast.id }); const state = data([forecast, actual]);
+  const result = applyConceptBulkChanges(state, forecast, "2026-10", { kind: "delete" }, now, true);
+  assert.deepEqual(result.movements, [forecast]); assert.deepEqual(importBackup(exportBackup(result, now)), result);
+});
+
+test("conceptos: importe futuro de series activas y pausadas no cambia meses anteriores, respeta omisiones y no duplica", () => {
+  const source = movement(); const active = series({ concept: source.concept, startDate: "2026-08-10", seedId: source.id });
+  const paused = series({ concept: " RÓPA ", active: false }); const other = series(); const expired = series({ concept: source.concept, endMonth: "2026-09" });
+  const state = data([source]); state.settings.recurringSeries = [active, paused, other, expired];
+  const result = applyConceptBulkChanges(state, source, "2026-10", { kind: "amount", amountCents: 33333 }, now);
+  assert.equal(result.settings.recurringSeries![0].amountCents, active.amountCents);
+  assert.equal(seriesAmountForMonth(result.settings.recurringSeries![0], "2026-09"), active.amountCents);
+  assert.equal(seriesAmountForMonth(result.settings.recurringSeries![0], "2030-01"), 33333);
+  assert.equal(seriesAmountForMonth(result.settings.recurringSeries![1], "2030-01"), 33333); assert.equal(result.settings.recurringSeries![1].active, false);
+  assert.deepEqual(result.settings.recurringSeries![2], other); assert.deepEqual(result.settings.recurringSeries![3], expired);
+  const generated = generateRecurring(result, "2026-09", now).filter((m) => seriesForMovement(result.settings, m)?.id === active.id);
+  assert.equal(generated.find((m) => m.date.startsWith("2026-09"))?.amountCents, active.amountCents);
+  assert.equal(generated.find((m) => m.date.startsWith("2026-11"))?.amountCents, 33333);
+  assert.equal(generateRecurring({ ...result, movements: [...result.movements, ...generateRecurring(result, "2026-09", now)] }, "2026-09", now).length, 0);
+});
+
+test("conceptos: un nuevo cambio sustituye revisiones posteriores pero conserva el histórico de importes", () => {
+  const source = movement(); const state = data([source]); state.settings.recurringSeries = [series({ concept: source.concept, amountRevisions: [{ fromMonth: "2026-03", amountCents: 2000 }, { fromMonth: "2026-11", amountCents: 3000 }, { fromMonth: "2027-05", amountCents: 4000 }] })];
+  const result = applyConceptBulkChanges(state, source, "2026-10", { kind: "amount", amountCents: 5000 }, now);
+  assert.deepEqual(result.settings.recurringSeries![0].amountRevisions, [{ fromMonth: "2026-03", amountCents: 2000 }, { fromMonth: "2026-10", amountCents: 5000 }]);
+  const update = updateFutureSeries(result, { ...source, id: result.settings.recurringSeries![0].seedId, date: "2026-11-15", amountCents: 6000 }, now);
+  assert.equal(seriesAmountForMonth(update.settings.recurringSeries![0], "2026-10"), 5000); assert.equal(seriesAmountForMonth(update.settings.recurringSeries![0], "2026-12"), 6000);
+});
+
+test("conceptos: eliminar finaliza todas las series coincidentes y no las regenera al sincronizar o reanudar", () => {
+  const source = movement(); const s = series({ concept: source.concept, startDate: "2026-08-15", seedId: source.id }); const paused = series({ concept: source.concept, active: false });
+  const old = movement({ id: occurrenceId(s, "2026-09"), date: "2026-09-15" }), future = movement({ id: occurrenceId(s, "2026-11"), date: "2026-11-15" });
+  const state = data([old, source, future]); state.settings.recurringSeries = [s, paused];
+  const result = applyConceptBulkChanges(state, source, "2026-10", { kind: "delete" }, now);
+  assert.deepEqual(result.movements, [old]); assert.equal(result.settings.recurringSeries!.every((r) => r.endMonth === "2026-09"), true);
+  assert.deepEqual(generateRecurring(result, "2026-10", now), []);
+  result.settings.recurringSeries = result.settings.recurringSeries!.map((r) => ({ ...r, active: true }));
+  assert.deepEqual(generateRecurring(result, "2027-01", now), []);
+  assert.equal(previewConceptBulkChanges(result, old, "2026-10").series.length, 0);
+});
+
+test("conceptos: también actualiza una serie sin ocurrencias editables y conserva las previsiones protegidas", () => {
+  const source = movement({ status: "confirmed" }); const state = data([source]); state.settings.recurringSeries = [series({ seedId: source.id, concept: source.concept })];
+  const result = applyConceptBulkChanges(state, source, "2026-10", { kind: "amount", amountCents: 11111 }, now);
+  assert.deepEqual(result.movements, state.movements); assert.equal(seriesAmountForMonth(result.settings.recurringSeries![0], "2026-10"), 11111);
+});
+
+test("conceptos: una operación masiva se deshace completa y produce acciones de sincronización solo para los afectados", () => {
+  const source = movement(); const copy = movement({ date: "2027-01-15" }); const past = movement({ date: "2026-09-15" });
+  const before = data([source, copy, past]); before.settings.recurringSeries = [series({ concept: source.concept, seedId: source.id })];
+  for (const action of [{ kind: "amount", amountCents: 4321 }, { kind: "delete" }] as const) {
+    const after = applyConceptBulkChanges(before, source, "2026-10", action, now);
+    const changes = dataChanges(before, after);
+    assert.equal(changes.length, 3); assert.equal(changes.filter((c) => c.action === "saveSettings").length, 1);
+    assert.equal(changes.filter((c) => c.action === (action.kind === "amount" ? "saveMovement" : "deleteMovement")).length, 2);
+    const undone = undoData(after, { label: "Conceptos", before, after, createdAt: now }, now);
+    assert.deepEqual(undone.settings, before.settings); assert.deepEqual([...undone.movements].sort((a, b) => a.id.localeCompare(b.id)), [...before.movements].sort((a, b) => a.id.localeCompare(b.id)));
+    assert.deepEqual(importBackup(exportBackup(after, now)), after);
+  }
+});
+
+test("conceptos: valida importes y meses sin modificar datos ni aceptar conceptos desactualizados", () => {
+  const source = movement(); const state = data([source]); const original = structuredClone(state);
+  for (const amountCents of [0, -1, 1.5, NaN, Infinity, 2147483648]) assert.throws(() => applyConceptBulkChanges(state, source, "2026-10", { kind: "amount", amountCents }, now), /importe/);
+  assert.throws(() => applyConceptBulkChanges(state, source, "2026-13", { kind: "delete" }, now), /mes válido/);
+  assert.throws(() => applyConceptBulkChanges(state, { ...source, concept: "Otro" }, "2026-10", { kind: "delete" }, now), /concepto ha cambiado/);
+  assert.throws(() => applyConceptBulkChanges(state, source, "2027-01", { kind: "delete" }, now), /No hay/);
+  assert.deepEqual(state, original);
+});
+
+test("copias: conservan revisiones de importe por mes y rechazan revisiones inválidas o duplicadas", () => {
+  const state = data(); const s = series({ amountRevisions: [{ fromMonth: "2026-10", amountCents: 12345 }] }); state.settings.recurringSeries = [s];
+  assert.deepEqual(importBackup(exportBackup(state, now)), state);
+  for (const amountRevisions of [[{ fromMonth: "2026-13", amountCents: 123 }], [{ fromMonth: "2026-10", amountCents: 0 }], [{ fromMonth: "2026-10", amountCents: 123 }, { fromMonth: "2026-10", amountCents: 456 }]]) assert.throws(() => importBackup(exportBackup({ ...state, settings: { ...state.settings, recurringSeries: [{ ...s, amountRevisions }] } }, now)), /no es válida/);
 });
