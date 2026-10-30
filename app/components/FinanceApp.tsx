@@ -1010,7 +1010,7 @@ function MovementsView({ data, month, onMonthChange, onAdd, onEdit }: {
   return (
     <div className="view-stack">
       <div className="page-intro"><span className="eyebrow">Registro manual</span><h1>Movimientos</h1><p>Todo lo que entra, sale o apartas para ahorrar.</p></div>
-      <MonthSwitcher month={month} onChange={onMonthChange} />
+      <MonthSwitcher month={month} onChange={onMonthChange} picker />
       <label className="search-box"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar por concepto o categoría" /></label>
       <div className="filter-scroll">
         {([['all','Todos'],['expense','Gastos'],['income','Ingresos'],['saving','Ahorro'],['planned','Previstos']] as const).map(([value, label]) => (
